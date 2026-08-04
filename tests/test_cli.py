@@ -140,3 +140,30 @@ def test_ocr_train_and_evaluate_commands_emit_artifact_paths(
     )
     assert evaluate_result.exit_code == 0
     assert f"json={report_paths.json_path}" in evaluate_result.stdout
+
+
+def test_real_data_import_command_emits_versioned_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    paths = SimpleNamespace(
+        manifest=tmp_path / "manifest.parquet",
+        dataset_metadata=tmp_path / "dataset.json",
+        validation_report=tmp_path / "validation.json",
+    )
+    monkeypatch.setattr(cli, "import_real_dataset", lambda *_args: paths)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "real-data",
+            "import",
+            "--input",
+            str(tmp_path / "records.jsonl"),
+            "--output-dir",
+            str(tmp_path / "versioned"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"manifest={paths.manifest}" in result.stdout
+    assert f"validation={paths.validation_report}" in result.stdout

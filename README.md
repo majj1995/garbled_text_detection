@@ -156,3 +156,24 @@ uv run pytest -m "not gpu" --cov=poor_word --cov-report=term-missing
 uv run ruff check .
 uv run mypy src
 ```
+
+## 导入真实种子数据
+
+真实数据使用 JSONL，一行一张图片；图片路径相对 JSONL 所在目录。图片级标签只表示
+`NORMAL`（全部可见文字正常）或 `ABNORMAL`（至少一个区域异常），不能自动推导异常字符。
+字符金标只接受带人工 `annotator_id` 的 `PASS`/`BLOCK`；未确认项写为 `REVIEW`。
+
+```json
+{"image_id":"case-001","image_path":"images/case-001.png","expected_sha256":"<64位小写SHA-256>","image_label":"ABNORMAL","split_role":"DEV","source_id":"business_seed","license_id":"LicenseRef-Proprietary","production_allowed":true,"product_id":"product-1","campaign_id":"campaign-1","template_id":"template-1","label_provenance":"human-image-review-v1","training_eligible":true,"characters":[{"annotation_id":"case-001-char-1","box":{"x0":12,"y0":20,"x1":58,"y1":76},"decision":"BLOCK","annotator_id":"reviewer-1","anomaly_kind":"missing_stroke"}]}
+```
+
+```bash
+uv run poor-word real-data import \
+  --input data/real/seed/records.jsonl \
+  --output-dir data/real/versioned/seed-v1
+```
+
+导入会解码每张图片、校验文件 SHA-256 与字符框边界，并验证来源许可和训练资格。
+输出 `manifest.parquet`、`dataset.json`、`validation.json`；后者审计 60 张开发异常、
+20 张锁定异常和 20 张困难正常的目标差额。`LOCKED_TEST` 或未获生产许可的数据不能
+标记为可训练。已有输出内容不一致时导入器拒绝覆盖，以保护数据版本不可变性。

@@ -17,6 +17,7 @@ from poor_word.glyphs.catalog import load_common_chars
 from poor_word.glyphs.corrupt import OPERATORS
 from poor_word.glyphs.generate import GenerationConfig, generate_dataset
 from poor_word.ocr.paddle_v5 import PaddleV5Adapter
+from poor_word.real_data.ingest import import_real_dataset
 from poor_word.training.train_glyph import TrainConfig, train_glyph
 
 app = typer.Typer(no_args_is_help=True)
@@ -25,11 +26,13 @@ glyphs_app = typer.Typer(no_args_is_help=True)
 ocr_app = typer.Typer(no_args_is_help=True)
 train_app = typer.Typer(no_args_is_help=True)
 evaluate_app = typer.Typer(no_args_is_help=True)
+real_data_app = typer.Typer(no_args_is_help=True)
 app.add_typer(data_app, name="data")
 app.add_typer(glyphs_app, name="glyphs")
 app.add_typer(ocr_app, name="ocr")
 app.add_typer(train_app, name="train")
 app.add_typer(evaluate_app, name="evaluate")
+app.add_typer(real_data_app, name="real-data")
 
 
 @app.callback()
@@ -238,3 +241,15 @@ def evaluate_glyph_command(
     )
     typer.echo(f"json={report.json_path}")
     typer.echo(f"markdown={report.markdown_path}")
+
+
+@real_data_app.command("import")
+def real_data_import_command(
+    input_jsonl: Annotated[Path, typer.Option("--input")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+) -> None:
+    """Validate real seed labels and create an immutable Parquet dataset."""
+    artifacts = import_real_dataset(input_jsonl, output_dir)
+    typer.echo(f"manifest={artifacts.manifest}")
+    typer.echo(f"dataset={artifacts.dataset_metadata}")
+    typer.echo(f"validation={artifacts.validation_report}")
