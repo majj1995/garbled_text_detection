@@ -25,6 +25,7 @@ from poor_word.real_data.review import (
     import_review_labels,
 )
 from poor_word.real_data.split import assign_group_folds
+from poor_word.training.adapt_real import AdaptConfig, adapt_real_encoder
 from poor_word.training.train_glyph import TrainConfig, train_glyph
 
 app = typer.Typer(no_args_is_help=True)
@@ -225,6 +226,38 @@ def train_glyph_command(
     )
     typer.echo(f"checkpoint={artifacts.checkpoint}")
     typer.echo(f"prototypes={artifacts.prototype_bank}")
+    typer.echo(f"metrics={artifacts.metrics}")
+
+
+@train_app.command("adapt-real")
+def train_adapt_real_command(
+    crop_manifest: Annotated[Path, typer.Option("--crop-manifest")],
+    real_manifest: Annotated[Path, typer.Option("--real-manifest")],
+    prior_checkpoint: Annotated[Path, typer.Option("--prior-checkpoint")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    epochs: Annotated[int, typer.Option("--epochs", min=1)] = 20,
+    max_steps: Annotated[int | None, typer.Option("--max-steps", min=1)] = None,
+    batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 64,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
+    device: Annotated[str, typer.Option("--device")] = "cuda",
+    learning_rate: Annotated[float, typer.Option("--learning-rate", min=0.0000001)] = 3e-5,
+) -> None:
+    """Adapt a prior encoder with eligible unlabeled real crops only."""
+    artifacts = adapt_real_encoder(
+        AdaptConfig(
+            crop_manifest=crop_manifest,
+            real_manifest=real_manifest,
+            prior_checkpoint=prior_checkpoint,
+            output_dir=output_dir,
+            epochs=epochs,
+            max_steps=max_steps,
+            batch_size=batch_size,
+            seed=seed,
+            device=device,
+            learning_rate=learning_rate,
+        )
+    )
+    typer.echo(f"checkpoint={artifacts.checkpoint}")
     typer.echo(f"metrics={artifacts.metrics}")
 
 

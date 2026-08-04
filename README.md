@@ -219,6 +219,41 @@ uv run poor-word real-data crops \
   --ocr-audit artifacts/ocr-audit-l20.json
 ```
 
+## 无标注真实裁剪自监督适配
+
+适配必须同时给出不可变的 `crops.parquet` 和其来源的真实图片 `manifest.parquet`。
+命令按 `image_id` 联接两者，在任何图片读取前拒绝重复或缺失 ID，并且只读取
+`training_eligible=true` 且不属于 `LOCKED_TEST` 的裁剪。每次运行确定性地从这些合格裁剪中
+留出一部分作漂移诊断；锁定测试裁剪既不训练，也不会被打开或用于诊断。
+
+CPU 冒烟（不下载预训练权重）：
+
+```bash
+uv run poor-word train adapt-real \
+  --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet \
+  --real-manifest data/real/versioned/seed-v1/manifest.parquet \
+  --prior-checkpoint artifacts/glyph-mvp-v1/encoder.pt \
+  --output-dir artifacts/glyph-real-adapt-smoke \
+  --device cpu --epochs 2 --batch-size 2 --max-steps 2
+```
+
+L20 完整适配：
+
+```bash
+uv run poor-word train adapt-real \
+  --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet \
+  --real-manifest data/real/versioned/seed-v1/manifest.parquet \
+  --prior-checkpoint artifacts/glyph-mvp-v1/encoder.pt \
+  --output-dir artifacts/glyph-real-adapt-v1 \
+  --device cuda --epochs 20 --batch-size 64
+```
+
+输出的 `encoder.pt` 保留父检查点、两份来源清单的 SHA-256；`metrics.json` 记录种子、Git/
+`uv.lock` 哈希、可用/训练/诊断裁剪计数、损失历史、耗时、坍塌防护与适配前后 held-out
+embedding 漂移。两视图只使用亮度、对比度、灰度/颜色、噪声与模糊等风格变换，不作裁剪、
+旋转、仿射或随机缩放。**适配后的检查点未针对 `BLOCK` 决策校准，不能直接作为 BLOCK
+阈值或生产决策依据。**
+
 快审队列的分数输入和模型分歧输入是 JSONL。分数行应含 `crop_id`、`image_id`、
 `crop_path`、`risk_score`（0–1）、`style_id`、`score_model_id` 和
 `score_artifact_sha256`；分歧行应含 `crop_id`、非负 `disagreement`、

@@ -142,6 +142,40 @@ def test_ocr_train_and_evaluate_commands_emit_artifact_paths(
     assert f"json={report_paths.json_path}" in evaluate_result.stdout
 
 
+def test_adapt_real_command_emits_adapted_artifact_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Break caught: the adaptation CLI fails to pass its required manifest inputs."""
+    artifacts = SimpleNamespace(
+        checkpoint=tmp_path / "encoder.pt", metrics=tmp_path / "metrics.json"
+    )
+    monkeypatch.setattr(cli, "adapt_real_encoder", lambda _config: artifacts)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "train",
+            "adapt-real",
+            "--crop-manifest",
+            str(tmp_path / "crops.parquet"),
+            "--real-manifest",
+            str(tmp_path / "real.parquet"),
+            "--prior-checkpoint",
+            str(tmp_path / "prior.pt"),
+            "--output-dir",
+            str(tmp_path / "adapted"),
+            "--device",
+            "cpu",
+            "--max-steps",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"checkpoint={artifacts.checkpoint}" in result.stdout
+    assert f"metrics={artifacts.metrics}" in result.stdout
+
+
 def test_real_data_import_command_emits_versioned_artifacts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
