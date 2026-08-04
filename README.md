@@ -79,13 +79,19 @@ uv run poor-word data fetch --source-id noto_sans_sc_regular
 uv run poor-word glyphs generate \
   --profile smoke \
   --seed 20260804 \
-  --output-dir data/generated/smoke
+  --output-dir data/generated/smoke-a
 
-# 3500 字 MVP 数据（建议在算力机执行）
+# 3500 字 MVP 训练集（建议在算力机执行）
 uv run poor-word glyphs generate \
   --profile mvp \
   --seed 20260804 \
-  --output-dir data/generated/mvp
+  --output-dir data/generated/mvp-v1
+
+# 独立合成 holdout；不同种子且不参与训练
+uv run poor-word glyphs generate \
+  --profile mvp \
+  --seed 20260805 \
+  --output-dir data/generated/mvp-holdout
 ```
 
 每次运行输出 `manifest.parquet` 和 `run.json`。不满足变化像素与拓扑后置条件的
@@ -109,3 +115,44 @@ uv run poor-word train glyph \
 
 训练输出 `encoder.pt`、`prototypes.npz/.json` 和 `metrics.json`；metrics 记录三项
 损失、验证集最近原型准确率、合成 OOD AUCPR、Git/uv/manifest 哈希及运行时间。
+
+## 低基率评估与报告
+
+```bash
+# 本地 CPU 工程冒烟；不提供 L20 审计时会明确记录 capability gap
+uv run poor-word evaluate glyph \
+  --manifest data/generated/smoke-a/manifest.parquet \
+  --artifacts artifacts/train-smoke \
+  --prevalence 0.001 \
+  --device cpu \
+  --output-dir artifacts/report-smoke
+
+# L20 完整合成 holdout 评估，并纳入 OCR 能力审计
+uv run poor-word evaluate glyph \
+  --manifest data/generated/mvp-holdout/manifest.parquet \
+  --artifacts artifacts/glyph-mvp-v1 \
+  --prevalence 0.001 \
+  --device cuda \
+  --ocr-audit artifacts/ocr-audit-l20.json \
+  --output-dir artifacts/report-mvp-v1
+```
+
+输出为 `report.json` 和 `report.md`。阈值表同时报告原始 TP/FP/TN/FN、召回、FPR
+以及按现网异常率 0.1% 重算的 precision；不会使用合成集或平衡采样集的类别比例替代
+现网基率。离线 MVP 门槛是 `FPR <= 0.01% 且 Recall >= 40%`，试运行门槛是
+`FPR <= 0.0025% 且 Recall >= 50%`。当样本量不足以分辨相应 FPR 时，报告会写入
+已知缺口；合成数据报告固定标注 `Not a production claim`。
+
+本开发机没有 NVIDIA 运行时，只验证 CPU 冒烟链路。上文 PP-OCRv5 审计、完整训练
+和 CUDA 评估命令必须在 NVIDIA L20 实验机执行。推荐的完整顺序是：锁定并拉取数据源、
+生成独立训练/holdout 合成集、运行 CPU 测试、在 L20 审计 OCR、训练字形模型，最后生成
+纳入 OCR 审计 JSON 的评估报告。
+
+## CPU 质量门禁
+
+```bash
+uv lock --check
+uv run pytest -m "not gpu" --cov=poor_word --cov-report=term-missing
+uv run ruff check .
+uv run mypy src
+```

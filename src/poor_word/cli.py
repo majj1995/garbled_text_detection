@@ -12,6 +12,7 @@ import typer
 from poor_word.config import PathsConfig
 from poor_word.data.download import fetch_locked_source, lock_source
 from poor_word.data.manifest import SourceSpec, load_source_lock, load_source_specs
+from poor_word.evaluation.report import evaluate_glyph_artifacts
 from poor_word.glyphs.catalog import load_common_chars
 from poor_word.glyphs.corrupt import OPERATORS
 from poor_word.glyphs.generate import GenerationConfig, generate_dataset
@@ -23,10 +24,12 @@ data_app = typer.Typer(no_args_is_help=True)
 glyphs_app = typer.Typer(no_args_is_help=True)
 ocr_app = typer.Typer(no_args_is_help=True)
 train_app = typer.Typer(no_args_is_help=True)
+evaluate_app = typer.Typer(no_args_is_help=True)
 app.add_typer(data_app, name="data")
 app.add_typer(glyphs_app, name="glyphs")
 app.add_typer(ocr_app, name="ocr")
 app.add_typer(train_app, name="train")
+app.add_typer(evaluate_app, name="evaluate")
 
 
 @app.callback()
@@ -211,3 +214,27 @@ def train_glyph_command(
     typer.echo(f"checkpoint={artifacts.checkpoint}")
     typer.echo(f"prototypes={artifacts.prototype_bank}")
     typer.echo(f"metrics={artifacts.metrics}")
+
+
+@evaluate_app.command("glyph")
+def evaluate_glyph_command(
+    manifest: Annotated[Path, typer.Option("--manifest")],
+    artifacts_dir: Annotated[Path, typer.Option("--artifacts")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    prevalence: Annotated[float, typer.Option("--prevalence", min=0.000001, max=0.999999)] = 0.001,
+    device: Annotated[str, typer.Option("--device")] = "cpu",
+    batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 64,
+    ocr_audit: Annotated[Path | None, typer.Option("--ocr-audit")] = None,
+) -> None:
+    """Evaluate glyph scores with deployment base-rate math and provenance."""
+    report = evaluate_glyph_artifacts(
+        manifest,
+        artifacts_dir,
+        output_dir,
+        prevalence=prevalence,
+        device=device,
+        batch_size=batch_size,
+        ocr_audit_path=ocr_audit,
+    )
+    typer.echo(f"json={report.json_path}")
+    typer.echo(f"markdown={report.markdown_path}")
