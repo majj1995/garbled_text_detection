@@ -391,6 +391,10 @@ def test_real_data_mining_yield_delegates_review_import_lineage(
             "mining-yield",
             "--candidate-queue",
             str(tmp_path / "queue.parquet"),
+            "--review-queue",
+            str(tmp_path / "review-queue"),
+            "--review-labels",
+            str(tmp_path / "review-labels.jsonl"),
             "--reviewed-gold",
             str(tmp_path / "gold-crops.parquet"),
             "--import-audit",
@@ -405,6 +409,11 @@ def test_real_data_mining_yield_delegates_review_import_lineage(
     assert result.exit_code == 0
     assert captured["base_real_manifest"] == tmp_path / "manifest.parquet"
     assert captured["previous_gold_manifest"] is None
+    assert captured["args"][:3] == (
+        tmp_path / "queue.parquet",
+        tmp_path / "review-queue",
+        tmp_path / "review-labels.jsonl",
+    )
     assert f"dataset_version={artifacts.dataset_version}" in result.stdout
 
 

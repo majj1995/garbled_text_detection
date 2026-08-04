@@ -465,6 +465,7 @@ def real_data_mine_command(
     per_product_cap: Annotated[int, typer.Option("--per-product-cap", min=1)] = 25,
     per_template_cap: Annotated[int, typer.Option("--per-template-cap", min=1)] = 10,
     per_source_cap: Annotated[int, typer.Option("--per-source-cap", min=1)] = 50,
+    fold_count: Annotated[int, typer.Option("--fold-count", min=2)] = 5,
     seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
 ) -> None:
     """Mine a provenance-checked candidate queue for human review only."""
@@ -481,6 +482,7 @@ def real_data_mine_command(
             per_product_cap=per_product_cap,
             per_template_cap=per_template_cap,
             per_source_cap=per_source_cap,
+            fold_count=fold_count,
             seed=seed,
         ),
         real_manifest=real_manifest,
@@ -496,6 +498,8 @@ def real_data_mine_command(
 @real_data_app.command("mining-yield")
 def real_data_mining_yield_command(
     candidate_queue: Annotated[Path, typer.Option("--candidate-queue")],
+    review_queue: Annotated[Path, typer.Option("--review-queue")],
+    review_labels: Annotated[Path, typer.Option("--review-labels")],
     reviewed_gold: Annotated[Path, typer.Option("--reviewed-gold")],
     import_audit: Annotated[Path, typer.Option("--import-audit")],
     base_real_manifest: Annotated[Path, typer.Option("--base-real-manifest")],
@@ -505,6 +509,8 @@ def real_data_mining_yield_command(
     """Record trusted review yield and publish the next dataset lineage version."""
     artifacts = record_mining_yield(
         candidate_queue,
+        review_queue,
+        review_labels,
         reviewed_gold,
         import_audit,
         base_real_manifest=base_real_manifest,

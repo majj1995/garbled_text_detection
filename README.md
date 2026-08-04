@@ -286,7 +286,8 @@ uv run poor-word review import \
 
 挖掘输入可以是不可变 Parquet 或 JSONL，每个字符候选都必须携带
 `crop_id`、`image_id`、安全相对 `crop_path`、`crop_sha256`、
-`source_image_sha256`、真实/折叠清单字段及其 SHA-256、两个模型的风险分数与检查点
+`source_image_sha256`、非空可信 `duplicate_group_id`、真实/折叠清单字段及其 SHA-256、
+两个独立模型来源的风险分数与检查点
 SHA-256、MIL attention，以及 `style_cluster_id`、`style_novelty_score` 和
 `style_is_unseen`。命令会先与冻结的真实和折叠清单联接；未知图片、来源/折叠不一致、
 不合规来源和哈希错误都会失败。`LOCKED_TEST`/`fold=-1` 只计入跳过审计，绝不进入队列。
@@ -306,6 +307,9 @@ uv run poor-word real-data mine \
 双模型分歧、阈值带、异常 bag 高 attention 和新风格簇；重复内容及单一 product、template、
 source 的过量候选会被抑制并记录。候选只有 `label_source=mining_candidate` 和
 `is_gold=false`，不会包含人工决策或审核者字段，也绝不会直接写入 gold。
+字符级硬去重只使用相同 `crop_sha256` 或显式 `duplicate_group_id`；同一原图中的不同字符
+不会因为共享 `source_image_sha256` 被删除。分歧来源的 model ID 和 checkpoint SHA-256
+都必须不同。默认要求合规开发数据完整覆盖连续五折 `0..4`，可用 `--fold-count` 显式调整。
 
 安全人工闭环如下：
 
@@ -324,14 +328,17 @@ uv run poor-word review import \
 
 uv run poor-word real-data mining-yield \
   --candidate-queue data/real/mining/candidates-v1/queue.parquet \
+  --review-queue data/real/review-queues/queue-<queue-version> \
+  --review-labels review-complete.jsonl \
   --reviewed-gold data/real/reviewed-gold/gold-<version>/gold-crops.parquet \
   --import-audit data/real/reviewed-gold/gold-<version>/import-audit.json \
   --base-real-manifest data/real/versioned/seed-v1/manifest.parquet \
   --output-dir data/real/versioned/seed-v2
 ```
 
-`mining-yield` 只接受 Task 3 人工导入产出的可信 gold 和审计，校验新增字符确实来自候选
-队列及其模型/图片/裁剪链路，然后只写 `dataset-version.json` 和 yield 审计；它不创建、
+`mining-yield` 同时绑定 Task 3 的完整 review queue、原始回传 labels、import audit 和可信
+gold，重新验证队列内容版本、labels SHA-256、每一条 PASS/BLOCK/REVIEW 的成员关系及
+模型/图片/裁剪链路，然后只写 `dataset-version.json` 和 yield 审计；它不创建、
 复制或改写 gold。分母明确为该次 import audit 的 `accepted_label_count + review_count`。
 候选是有偏采样，因此该 yield **不是现网异常率估计**；`0.001` 只作为现网基准率上下文，
 本命令不批准生产阈值。该流程是 CPU 元数据处理，无 L20/GPU 特殊要求。

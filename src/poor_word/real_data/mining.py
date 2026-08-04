@@ -17,6 +17,7 @@ from typing import cast
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
+from poor_word.real_data.review import _load_queue, _read_label_rows
 from poor_word.real_data.schema import ImageLabel, SplitRole
 
 _BUCKET_ORDER = (
@@ -43,6 +44,7 @@ class MiningPolicy:
     per_source_cap: int = 50
     seed: int = 20260804
     base_rate_context: float = 0.001
+    fold_count: int = 5
 
     def __post_init__(self) -> None:
         probabilities = (
@@ -70,6 +72,8 @@ class MiningPolicy:
             raise ValueError("mining limits and caps must be positive")
         if self.seed < 0:
             raise ValueError("mining seed must be non-negative")
+        if type(self.fold_count) is not int or self.fold_count < 2:
+            raise ValueError("fold_count must be an integer of at least 2")
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,7 @@ _QUEUE_SCHEMA = pa.schema(
         ("image_id", pa.string()),
         ("crop_path", pa.string()),
         ("crop_sha256", pa.string()),
+        ("duplicate_group_id", pa.string()),
         ("source_image_sha256", pa.string()),
         ("image_label", pa.string()),
         ("split_role", pa.string()),
@@ -302,7 +307,7 @@ def _validate_and_build_candidates(
             raise ValueError(f"score row references unknown image_id: {image_id}")
         trusted_role = _text(fold, "split_role", "fold manifest")
         trusted_fold = fold.get("fold")
-        if trusted_role not in roles or not isinstance(trusted_fold, int):
+        if trusted_role not in roles or type(trusted_fold) is not int:
             raise ValueError(f"fold manifest has invalid role/fold for image_id={image_id}")
         if trusted_role == SplitRole.LOCKED_TEST.value or trusted_fold == -1:
             if trusted_role != SplitRole.LOCKED_TEST.value or trusted_fold != -1:
@@ -320,7 +325,8 @@ def _validate_and_build_candidates(
             raise ValueError(f"real/fold manifest role or label mismatch for image_id={image_id}")
         if real.get("production_allowed") is not True or real.get("training_eligible") is not True:
             raise ValueError(f"score row references ineligible source for image_id={image_id}")
-        if raw.get("fold") != trusted_fold:
+        score_fold = raw.get("fold")
+        if type(score_fold) is not int or score_fold != trusted_fold:
             raise ValueError(f"score row fold mismatch for image_id={image_id}")
         for field, expected in (
             ("image_label", image_label),
@@ -352,6 +358,7 @@ def _validate_and_build_candidates(
             "image_id": image_id,
             "crop_path": _relative_path(raw, "crop_path"),
             "crop_sha256": _sha(raw, "crop_sha256", "score row"),
+            "duplicate_group_id": _text(raw, "duplicate_group_id", "score row"),
             "source_image_sha256": _sha(raw, "source_image_sha256", "score row"),
             "image_label": image_label,
             "split_role": real_role,
@@ -375,6 +382,11 @@ def _validate_and_build_candidates(
             "label_source": "mining_candidate",
             "is_gold": False,
         }
+        if (
+            row["score_model_id"] == row["alternate_model_id"]
+            or row["score_checkpoint_sha256"] == row["alternate_checkpoint_sha256"]
+        ):
+            raise ValueError("primary and alternate disagreement sources must be independent")
         if not reasons:
             continue
         candidates.append(
@@ -395,32 +407,26 @@ def _rank_key(candidate: _Candidate, seed: int) -> tuple[float, float, str]:
 def _suppress_duplicates(
     candidates: Sequence[_Candidate], seed: int
 ) -> tuple[list[_Candidate], int]:
-    ordered = sorted(
-        candidates,
-        key=lambda candidate: (
-            min(_BUCKET_ORDER.index(reason) for reason in candidate.reasons),
-            *_rank_key(candidate, seed),
-        ),
-    )
+    ordered = sorted(candidates, key=lambda candidate: _rank_key(candidate, seed))
     crop_hashes: set[str] = set()
-    image_hashes: set[str] = set()
+    duplicate_groups: set[str] = set()
     kept: list[_Candidate] = []
     suppressed = 0
     for candidate in ordered:
         crop_hash = str(candidate.row["crop_sha256"])
-        image_hash = str(candidate.row["source_image_sha256"])
-        if crop_hash in crop_hashes or image_hash in image_hashes:
+        duplicate_group = str(candidate.row["duplicate_group_id"])
+        if crop_hash in crop_hashes or duplicate_group in duplicate_groups:
             suppressed += 1
             continue
         crop_hashes.add(crop_hash)
-        image_hashes.add(image_hash)
+        duplicate_groups.add(duplicate_group)
         kept.append(candidate)
     return kept, suppressed
 
 
 def _apply_caps_and_coverage(
     candidates: Sequence[_Candidate], policy: MiningPolicy
-) -> tuple[list[_Candidate], Counter[str]]:
+) -> tuple[list[_Candidate], Counter[str], int]:
     by_bucket = {
         bucket: sorted(
             (candidate for candidate in candidates if bucket in candidate.reasons),
@@ -435,7 +441,8 @@ def _apply_caps_and_coverage(
     template_counts: Counter[str] = Counter()
     source_counts: Counter[str] = Counter()
     suppressed: Counter[str] = Counter()
-    while len(selected) < policy.overall_limit:
+    suppressed_candidates = 0
+    while True:
         progressed = False
         for bucket in _BUCKET_ORDER:
             values = by_bucket[bucket]
@@ -458,6 +465,7 @@ def _apply_caps_and_coverage(
                     cap_reasons.append("source")
                 if cap_reasons:
                     suppressed.update(cap_reasons)
+                    suppressed_candidates += 1
                 else:
                     selected.append(candidate)
                     product_counts[product] += 1
@@ -465,11 +473,9 @@ def _apply_caps_and_coverage(
                     source_counts[source] += 1
                 progressed = True
                 break
-            if len(selected) >= policy.overall_limit:
-                break
         if not progressed:
             break
-    return selected, suppressed
+    return selected, suppressed, suppressed_candidates
 
 
 def _publish_directory(output_dir: Path, files: Mapping[str, bytes], artifact: str) -> None:
@@ -526,6 +532,39 @@ def mine_candidates(
     )
     if set(real_rows) != set(fold_rows):
         raise ValueError("real and fold manifests must contain identical image_id values")
+    observed_folds: set[int] = set()
+    valid_roles = {role.value for role in SplitRole}
+    valid_labels = {label.value for label in ImageLabel}
+    for image_id, fold_row in fold_rows.items():
+        role = _text(fold_row, "split_role", "fold manifest")
+        if role not in valid_roles:
+            raise ValueError(f"fold manifest has invalid split_role for image_id={image_id}")
+        fold = fold_row.get("fold")
+        if type(fold) is not int:
+            raise ValueError(f"fold manifest requires integer fold for image_id={image_id}")
+        real = real_rows[image_id]
+        real_role = _text(real, "split_role", "real manifest")
+        real_label = _text(real, "image_label", "real manifest")
+        if (
+            real_role != role
+            or real_label not in valid_labels
+            or fold_row["image_label"] != real_label
+        ):
+            raise ValueError(f"real/fold manifest role or label mismatch for image_id={image_id}")
+        if role == SplitRole.LOCKED_TEST.value:
+            if fold != -1:
+                raise ValueError(f"locked-test fold must be -1 for image_id={image_id}")
+            continue
+        if not 0 <= fold < policy.fold_count:
+            raise ValueError(
+                f"development fold is outside configured range for image_id={image_id}"
+            )
+        if real.get("production_allowed") is True and real.get("training_eligible") is True:
+            observed_folds.add(fold)
+    if observed_folds != set(range(policy.fold_count)):
+        raise ValueError(
+            "eligible development fold set must equal the configured contiguous fold range"
+        )
     candidates, locked_skipped = _validate_and_build_candidates(
         _load_rows(scores, "score manifest"),
         real_rows,
@@ -536,7 +575,11 @@ def mine_candidates(
         policy,
     )
     deduplicated, duplicate_suppression_count = _suppress_duplicates(candidates, policy.seed)
-    selected, cap_suppression_counts = _apply_caps_and_coverage(deduplicated, policy)
+    cap_admitted, cap_suppression_counts, cap_suppressed_candidate_count = _apply_caps_and_coverage(
+        deduplicated, policy
+    )
+    selected = cap_admitted[: policy.overall_limit]
+    overall_limit_suppression_count = len(cap_admitted) - len(selected)
     rows_without_version = [
         {
             "priority_rank": rank,
@@ -587,6 +630,11 @@ def mine_candidates(
             key: cap_suppression_counts[key] for key in ("product", "template", "source")
         },
         "duplicate_suppression_count": duplicate_suppression_count,
+        "eligible_candidate_count": len(candidates),
+        "selected_count": len(selected),
+        "overall_limit_suppression_count": overall_limit_suppression_count,
+        "cap_suppression_semantics": ("trigger counts; one candidate may trigger multiple caps"),
+        "cap_suppressed_candidate_count": cap_suppressed_candidate_count,
         "locked_test_skipped_count": locked_skipped,
         "policy": asdict(policy),
         "seed": policy.seed,
@@ -639,6 +687,7 @@ def _read_import_audit(path: Path) -> dict[str, object]:
         raise ValueError("review import audit must be an object")
     audit = cast(dict[str, object], raw)
     _text(audit, "queue_version", "review import audit")
+    _sha(audit, "labels_sha256", "review import audit")
     for field in ("accepted_label_count", "new_gold_count", "review_count"):
         value = audit.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -646,8 +695,49 @@ def _read_import_audit(path: Path) -> dict[str, object]:
     return audit
 
 
+def _validated_review_labels(
+    path: Path,
+    queue_version: str,
+    review_queue: Mapping[str, Mapping[str, object]],
+    mining_queue: Mapping[str, Mapping[str, object]],
+) -> dict[str, dict[str, object]]:
+    labels: dict[str, dict[str, object]] = {}
+    for row in _read_label_rows(path):
+        crop_id = _text(row, "crop_id", "review labels")
+        if crop_id in labels:
+            raise ValueError(f"review labels have duplicate crop_id: {crop_id}")
+        if row.get("queue_version") != queue_version:
+            raise ValueError(f"review label queue version mismatch for crop_id={crop_id}")
+        _text(row, "annotator_id", "review labels")
+        if row.get("label") not in {"PASS", "BLOCK", "REVIEW"}:
+            raise ValueError(f"review label decision is invalid for crop_id={crop_id}")
+        reviewed = review_queue.get(crop_id)
+        candidate = mining_queue.get(crop_id)
+        if reviewed is None:
+            raise ValueError(f"review label is outside Task3 review queue: {crop_id}")
+        if candidate is None:
+            raise ValueError(f"review label is outside mining queue: {crop_id}")
+        comparisons = (
+            ("image_id", "image_id"),
+            ("crop_path", "crop_path"),
+            ("crop_sha256", "crop_sha256"),
+            ("source_image_sha256", "source_image_sha256"),
+            ("score_model_id", "score_model_id"),
+            ("score_artifact_sha256", "score_checkpoint_sha256"),
+            ("disagreement_model_id", "alternate_model_id"),
+            ("disagreement_artifact_sha256", "alternate_checkpoint_sha256"),
+        )
+        for review_field, mining_field in comparisons:
+            if reviewed.get(review_field) != candidate.get(mining_field):
+                raise ValueError(f"review queue provenance mismatch for crop_id={crop_id}")
+        labels[crop_id] = row
+    return labels
+
+
 def record_mining_yield(
     candidate_queue: Path,
+    review_queue: Path,
+    review_labels: Path,
     reviewed_gold_manifest: Path,
     import_audit: Path,
     *,
@@ -668,6 +758,27 @@ def record_mining_yield(
     if not queue:
         raise ValueError("mining queue contains no candidates")
 
+    audit = _read_import_audit(import_audit)
+    review_queue_version, review_queue_rows = _load_queue(review_queue)
+    if audit["queue_version"] != review_queue_version:
+        raise ValueError("review import audit queue version does not match Task3 queue")
+    if audit["labels_sha256"] != _sha256(review_labels):
+        raise ValueError("review import audit labels_sha256 does not match review labels")
+    labels = _validated_review_labels(
+        review_labels,
+        review_queue_version,
+        review_queue_rows,
+        queue,
+    )
+    accepted_labels = {
+        crop_id: row for crop_id, row in labels.items() if row["label"] in {"PASS", "BLOCK"}
+    }
+    review_ids = {crop_id for crop_id, row in labels.items() if row["label"] == "REVIEW"}
+    if audit["accepted_label_count"] != len(accepted_labels):
+        raise ValueError("review import audit accepted count does not match review labels")
+    if audit["review_count"] != len(review_ids):
+        raise ValueError("review import audit REVIEW count does not match review labels")
+
     current = _load_gold(reviewed_gold_manifest, "reviewed gold manifest")
     previous = (
         _load_gold(previous_gold_manifest, "previous gold manifest")
@@ -678,31 +789,48 @@ def record_mining_yield(
         if current.get(crop_id) != old:
             raise ValueError(f"reviewed gold changed previous gold row: {crop_id}")
     new = {crop_id: row for crop_id, row in current.items() if crop_id not in previous}
-    audit = _read_import_audit(import_audit)
-    if audit["new_gold_count"] != len(new) or audit["accepted_label_count"] != len(new):
+    if audit["new_gold_count"] != len(new):
         raise ValueError("review import audit counts do not match new reviewed gold")
-    queue_version = str(audit["queue_version"])
-    for crop_id, row in new.items():
+    expected_new = set(accepted_labels) - set(previous)
+    if set(new) != expected_new:
+        raise ValueError("new reviewed gold does not match accepted review labels")
+    if review_ids & set(current):
+        raise ValueError("REVIEW labels must remain absent from reviewed gold")
+    queue_manifest_sha256 = _sha256(review_queue / "queue.jsonl")
+    for crop_id, label in accepted_labels.items():
+        gold_row = current.get(crop_id)
+        if gold_row is None:
+            raise ValueError(f"accepted review label is absent from gold: {crop_id}")
         candidate = queue.get(crop_id)
-        if candidate is None:
-            raise ValueError(f"new reviewed gold is outside mining queue: {crop_id}")
-        if row.get("queue_version") != queue_version:
+        if candidate is None:  # Guarded by _validated_review_labels; keeps type narrowing local.
+            raise ValueError(f"accepted review label is outside mining queue: {crop_id}")
+        if gold_row.get("queue_version") != review_queue_version:
             raise ValueError(f"review queue provenance mismatch for crop_id={crop_id}")
+        if gold_row.get("queue_manifest_sha256") != queue_manifest_sha256:
+            raise ValueError(f"review queue manifest hash mismatch for crop_id={crop_id}")
+        if (
+            gold_row.get("decision") != label["label"]
+            or gold_row.get("annotator_id") != label["annotator_id"]
+        ):
+            raise ValueError(f"reviewed gold decision provenance mismatch for crop_id={crop_id}")
         comparisons = (
             ("image_id", "image_id"),
+            ("crop_path", "crop_path"),
             ("crop_sha256", "crop_sha256"),
             ("source_image_sha256", "source_image_sha256"),
             ("score_model_id", "score_model_id"),
             ("score_artifact_sha256", "score_checkpoint_sha256"),
+            ("disagreement_model_id", "alternate_model_id"),
+            ("disagreement_artifact_sha256", "alternate_checkpoint_sha256"),
         )
         for gold_field, queue_field in comparisons:
-            if row.get(gold_field) != candidate.get(queue_field):
+            if gold_row.get(gold_field) != candidate.get(queue_field):
                 raise ValueError(f"reviewed gold provenance mismatch for crop_id={crop_id}")
 
-    pass_count = sum(row["decision"] == "PASS" for row in new.values())
-    block_count = sum(row["decision"] == "BLOCK" for row in new.values())
-    accepted = audit["accepted_label_count"]
-    unresolved = cast(int, audit["review_count"])
+    pass_count = sum(row["label"] == "PASS" for row in accepted_labels.values())
+    block_count = sum(row["label"] == "BLOCK" for row in accepted_labels.values())
+    accepted = len(accepted_labels)
+    unresolved = len(review_ids)
     reviewed = accepted + unresolved
     counts = {
         "accepted_block": block_count,
@@ -714,6 +842,9 @@ def record_mining_yield(
     lineage = {
         "base_real_manifest_sha256": _sha256(base_real_manifest),
         "candidate_queue_sha256": _sha256(candidate_queue),
+        "review_queue_metadata_sha256": _sha256(review_queue / "queue.json"),
+        "review_queue_jsonl_sha256": queue_manifest_sha256,
+        "review_labels_sha256": _sha256(review_labels),
         "review_import_audit_sha256": _sha256(import_audit),
         "previous_gold_manifest_sha256": (
             _sha256(previous_gold_manifest) if previous_gold_manifest is not None else None

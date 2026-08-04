@@ -5,11 +5,17 @@ from pathlib import Path
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
+from PIL import Image
 
 from poor_word.real_data.mining import (
     MiningPolicy,
     mine_candidates,
     record_mining_yield,
+)
+from poor_word.real_data.review import (
+    ReviewCandidate,
+    export_review_queue,
+    import_review_labels,
 )
 
 
@@ -20,6 +26,13 @@ def _sha(path: Path) -> str:
 def _write_parquet(path: Path, rows: list[dict[str, object]]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(rows), path)
+    return path
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> Path:
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8"
+    )
     return path
 
 
@@ -91,6 +104,7 @@ def _score_rows(
             "image_id": image_id,
             "crop_path": f"crops/{image_id}.png",
             "crop_sha256": crop_sha,
+            "duplicate_group_id": f"group-{image_id}",
             "source_image_sha256": source["image_sha256"],
             "image_label": source["image_label"],
             "split_role": source["split_role"],
@@ -126,7 +140,7 @@ def _score_rows(
         }
 
     duplicate_hash = "d" * 64
-    return [
+    rows = [
         row("normal-fp", 0.95, 0.91, 0.1, 0.1, False, crop_sha="1" * 64),
         row("disagree", 0.72, 0.20, 0.2, 0.1, False, crop_sha="2" * 64),
         row("threshold", 0.51, 0.50, 0.1, 0.1, False, crop_sha="3" * 64),
@@ -136,6 +150,13 @@ def _score_rows(
         row("crop-duplicate", 0.59, 0.58, 0.2, 0.82, True, crop_sha=duplicate_hash),
         row("locked", 0.99, 0.01, 0.99, 0.99, True, crop_sha="8" * 64),
     ]
+    rows[4]["duplicate_group_id"] = "equivalent-new-style"
+    rows[6].update(
+        crop_sha256="7" * 64,
+        duplicate_group_id="equivalent-new-style",
+        attention_score=0.82,
+    )
+    return rows
 
 
 def test_mining_covers_five_buckets_deduplicates_caps_and_never_emits_labels(
@@ -184,6 +205,19 @@ def test_mining_covers_five_buckets_deduplicates_caps_and_never_emits_labels(
     assert metadata["bucket_counts"]["NEW_STYLE_CLUSTER"] == 1
     assert metadata["duplicate_suppression_count"] == 1
     assert metadata["cap_suppression_counts"]["product"] == 1
+    assert (
+        metadata["cap_suppression_semantics"]
+        == "trigger counts; one candidate may trigger multiple caps"
+    )
+    assert metadata["eligible_candidate_count"] == 7
+    assert metadata["selected_count"] == len(rows)
+    assert metadata["overall_limit_suppression_count"] == 0
+    assert metadata["eligible_candidate_count"] == (
+        metadata["selected_count"]
+        + metadata["duplicate_suppression_count"]
+        + metadata["cap_suppressed_candidate_count"]
+        + metadata["overall_limit_suppression_count"]
+    )
     assert metadata["production_prevalence_estimate"] is None
     assert metadata["base_rate_context"] == 0.001
     assert (
@@ -210,6 +244,13 @@ def test_mining_covers_five_buckets_deduplicates_caps_and_never_emits_labels(
             ),
             "score_model_id",
         ),
+        (
+            lambda rows: rows[1].update(
+                alternate_model_id=rows[1]["score_model_id"],
+                alternate_checkpoint_sha256=rows[1]["score_checkpoint_sha256"],
+            ),
+            "independent",
+        ),
     ],
 )
 def test_mining_fails_closed_on_untrusted_score_rows(
@@ -228,6 +269,62 @@ def test_mining_fails_closed_on_untrusted_score_rows(
             fold_manifest=folds,
             output_dir=tmp_path / "mined",
         )
+
+
+@pytest.mark.parametrize("bad_fold", [True, 99, None])
+def test_mining_requires_exact_contiguous_development_folds(
+    tmp_path: Path, bad_fold: object
+) -> None:
+    real, folds, real_rows = _manifests(tmp_path)
+    fold_rows = pq.read_table(folds).to_pylist()
+    fold_rows[0]["fold"] = bad_fold
+    folds = _write_jsonl(tmp_path / "folds.jsonl", fold_rows)
+    scores = _write_parquet(tmp_path / "scores.parquet", _score_rows(real, folds, real_rows))
+
+    with pytest.raises(ValueError, match="fold"):
+        mine_candidates(
+            scores,
+            MiningPolicy(fold_count=5),
+            real_manifest=real,
+            fold_manifest=folds,
+            output_dir=tmp_path / "mined",
+        )
+
+
+def test_mining_keeps_distinct_crops_from_one_image_and_deduplicates_by_global_priority(
+    tmp_path: Path,
+) -> None:
+    real, folds, real_rows = _manifests(tmp_path)
+    rows = _score_rows(real, folds, real_rows)
+    second_crop = dict(rows[0])
+    second_crop.update(
+        crop_id="crop-normal-fp-second",
+        crop_path="crops/normal-fp-second.png",
+        crop_sha256="9" * 64,
+        duplicate_group_id="group-normal-fp-second",
+        risk_score=0.94,
+    )
+    rows.append(second_crop)
+    scores = _write_parquet(tmp_path / "scores.parquet", rows)
+
+    artifacts = mine_candidates(
+        scores,
+        MiningPolicy(
+            overall_limit=20,
+            per_product_cap=20,
+            per_template_cap=20,
+            per_source_cap=20,
+        ),
+        real_manifest=real,
+        fold_manifest=folds,
+        output_dir=tmp_path / "mined",
+    )
+
+    mined = pq.read_table(artifacts.queue).to_pylist()
+    ids = {row["crop_id"] for row in mined}
+    assert {"crop-normal-fp", "crop-normal-fp-second"}.issubset(ids)
+    assert "crop-new-style" in ids
+    assert "crop-crop-duplicate" not in ids
 
 
 def test_mining_publish_is_idempotent_but_refuses_overwrite(tmp_path: Path) -> None:
@@ -262,7 +359,192 @@ def test_mining_publish_is_idempotent_but_refuses_overwrite(tmp_path: Path) -> N
         )
 
 
-def test_record_mining_yield_only_versions_reviewed_gold_and_rejects_outside_queue(
+def _review_cycle(
+    tmp_path: Path,
+    candidate_rows: list[dict[str, object]],
+    labels: list[tuple[str, str]],
+) -> tuple[Path, Path, Path, Path]:
+    crop_root = tmp_path / "review-crops"
+    crop_manifest_rows: list[dict[str, object]] = []
+    queue: list[ReviewCandidate] = []
+    by_id = {str(row["crop_id"]): row for row in candidate_rows}
+    for crop_id, _ in labels:
+        row = by_id[crop_id]
+        path = crop_root / str(row["crop_path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 8), "white").save(path)
+        crop_manifest_rows.append(
+            {
+                "crop_id": crop_id,
+                "crop_path": row["crop_path"],
+                "source_image_sha256": row["source_image_sha256"],
+                "crop_sha256": row["crop_sha256"],
+            }
+        )
+        queue.append(
+            ReviewCandidate(
+                crop_id=crop_id,
+                image_id=str(row["image_id"]),
+                crop_path=str(row["crop_path"]),
+                risk_score=float(row["risk_score"]),
+                style_id=str(row["style_cluster_id"]),
+                disagreement=abs(float(row["risk_score"]) - float(row["alternate_risk_score"])),
+                score_model_id=str(row["score_model_id"]),
+                score_artifact_sha256=str(row["score_checkpoint_sha256"]),
+                disagreement_model_id=str(row["alternate_model_id"]),
+                disagreement_artifact_sha256=str(row["alternate_checkpoint_sha256"]),
+            )
+        )
+    crop_manifest = _write_parquet(tmp_path / "review-crops.parquet", crop_manifest_rows)
+    exported = export_review_queue(queue, crop_manifest, crop_root, tmp_path / "review-queue")
+    review_labels = tmp_path / "review-labels.jsonl"
+    review_labels.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "queue_version": exported.queue_version,
+                    "crop_id": crop_id,
+                    "label": decision,
+                    "annotator_id": "alice",
+                }
+            )
+            + "\n"
+            for crop_id, decision in labels
+        ),
+        encoding="utf-8",
+    )
+    imported = import_review_labels(review_labels, exported.queue, tmp_path / "review-import")
+    return exported.queue, review_labels, imported.gold_crops, imported.audit
+
+
+def test_record_mining_yield_binds_review_queue_labels_and_gold(tmp_path: Path) -> None:
+    real, folds, real_rows = _manifests(tmp_path)
+    scores = _write_parquet(tmp_path / "scores.parquet", _score_rows(real, folds, real_rows))
+    mined = mine_candidates(
+        scores,
+        MiningPolicy(),
+        real_manifest=real,
+        fold_manifest=folds,
+        output_dir=tmp_path / "mined",
+    )
+    candidates = pq.read_table(mined.queue).to_pylist()
+    review_queue, review_labels, gold, audit = _review_cycle(
+        tmp_path,
+        candidates,
+        [(str(candidates[0]["crop_id"]), "BLOCK"), (str(candidates[1]["crop_id"]), "REVIEW")],
+    )
+
+    version = record_mining_yield(
+        mined.queue,
+        review_queue,
+        review_labels,
+        gold,
+        audit,
+        base_real_manifest=real,
+        output_dir=tmp_path / "dataset-v2",
+    )
+    payload = json.loads(version.dataset_version.read_text(encoding="utf-8"))
+    assert payload["counts"] == {
+        "accepted_block": 1,
+        "accepted_pass": 0,
+        "accepted_total": 1,
+        "reviewed_total": 2,
+        "unresolved_review": 1,
+    }
+    assert payload["accepted_yield"] == pytest.approx(1 / 2)
+    assert (
+        payload["yield_denominator"]
+        == "accepted_label_count + review_count in the trusted import audit"
+    )
+    assert payload["production_prevalence_estimate"] is None
+    assert not hasattr(version, "gold_crops")
+
+    assert payload["lineage"]["review_queue_jsonl_sha256"] == _sha(review_queue / "queue.jsonl")
+    assert payload["lineage"]["review_labels_sha256"] == _sha(review_labels)
+
+
+def test_record_mining_yield_rejects_review_outside_mining_queue(tmp_path: Path) -> None:
+    real, folds, real_rows = _manifests(tmp_path)
+    scores = _write_parquet(tmp_path / "scores.parquet", _score_rows(real, folds, real_rows))
+    mined = mine_candidates(
+        scores,
+        MiningPolicy(),
+        real_manifest=real,
+        fold_manifest=folds,
+        output_dir=tmp_path / "mined",
+    )
+    candidates = pq.read_table(mined.queue).to_pylist()
+    outside = dict(candidates[0])
+    outside.update(
+        crop_id="outside-mining",
+        crop_path="crops/outside.png",
+        crop_sha256="e" * 64,
+        duplicate_group_id="outside-group",
+    )
+    review_queue, review_labels, gold, audit = _review_cycle(
+        tmp_path,
+        [candidates[0], outside],
+        [(str(candidates[0]["crop_id"]), "PASS"), ("outside-mining", "REVIEW")],
+    )
+
+    with pytest.raises(ValueError, match="outside mining queue"):
+        record_mining_yield(
+            mined.queue,
+            review_queue,
+            review_labels,
+            gold,
+            audit,
+            base_real_manifest=real,
+            output_dir=tmp_path / "rejected",
+        )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["audit-queue-version", "labels-sha", "queue-priority", "gold-queue-hash"],
+)
+def test_record_mining_yield_rejects_tampered_review_lineage(tmp_path: Path, tamper: str) -> None:
+    real, folds, real_rows = _manifests(tmp_path)
+    scores = _write_parquet(tmp_path / "scores.parquet", _score_rows(real, folds, real_rows))
+    mined = mine_candidates(
+        scores,
+        MiningPolicy(),
+        real_manifest=real,
+        fold_manifest=folds,
+        output_dir=tmp_path / "mined",
+    )
+    candidates = pq.read_table(mined.queue).to_pylist()
+    review_queue, review_labels, gold, audit = _review_cycle(
+        tmp_path, candidates, [(str(candidates[0]["crop_id"]), "PASS")]
+    )
+    if tamper in {"audit-queue-version", "labels-sha"}:
+        payload = json.loads(audit.read_text(encoding="utf-8"))
+        field = "queue_version" if tamper == "audit-queue-version" else "labels_sha256"
+        payload[field] = "f" * 64
+        audit.write_text(json.dumps(payload), encoding="utf-8")
+    elif tamper == "queue-priority":
+        queue_jsonl = review_queue / "queue.jsonl"
+        row = json.loads(queue_jsonl.read_text(encoding="utf-8"))
+        row["priority_rank"] = 9
+        queue_jsonl.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    else:
+        gold_rows = pq.read_table(gold).to_pylist()
+        gold_rows[0]["queue_manifest_sha256"] = "f" * 64
+        _write_parquet(gold, gold_rows)
+
+    with pytest.raises(ValueError):
+        record_mining_yield(
+            mined.queue,
+            review_queue,
+            review_labels,
+            gold,
+            audit,
+            base_real_manifest=real,
+            output_dir=tmp_path / "rejected",
+        )
+
+
+def test_record_mining_yield_allows_accepted_label_already_in_previous_gold(
     tmp_path: Path,
 ) -> None:
     real, folds, real_rows = _manifests(tmp_path)
@@ -274,67 +556,28 @@ def test_record_mining_yield_only_versions_reviewed_gold_and_rejects_outside_que
         fold_manifest=folds,
         output_dir=tmp_path / "mined",
     )
-    candidate = pq.read_table(mined.queue).to_pylist()[0]
-    gold = _write_parquet(
-        tmp_path / "review-import" / "gold-crops.parquet",
-        [
-            {
-                "crop_id": candidate["crop_id"],
-                "image_id": candidate["image_id"],
-                "crop_sha256": candidate["crop_sha256"],
-                "source_image_sha256": candidate["source_image_sha256"],
-                "decision": "BLOCK",
-                "annotator_id": "alice",
-                "queue_version": "review-queue-v1",
-                "score_model_id": candidate["score_model_id"],
-                "score_artifact_sha256": candidate["score_checkpoint_sha256"],
-            }
-        ],
+    candidates = pq.read_table(mined.queue).to_pylist()
+    review_queue, review_labels, previous_gold, _ = _review_cycle(
+        tmp_path, candidates, [(str(candidates[0]["crop_id"]), "PASS")]
     )
-    audit = tmp_path / "review-import" / "import-audit.json"
-    audit.write_text(
-        json.dumps(
-            {
-                "queue_version": "review-queue-v1",
-                "accepted_label_count": 1,
-                "new_gold_count": 1,
-                "review_count": 2,
-            }
-        ),
-        encoding="utf-8",
+    imported = import_review_labels(
+        review_labels,
+        review_queue,
+        tmp_path / "review-import-repeat",
+        existing_gold=previous_gold,
     )
 
     version = record_mining_yield(
         mined.queue,
-        gold,
-        audit,
+        review_queue,
+        review_labels,
+        imported.gold_crops,
+        imported.audit,
         base_real_manifest=real,
+        previous_gold_manifest=previous_gold,
         output_dir=tmp_path / "dataset-v2",
     )
-    payload = json.loads(version.dataset_version.read_text(encoding="utf-8"))
-    assert payload["counts"] == {
-        "accepted_block": 1,
-        "accepted_pass": 0,
-        "accepted_total": 1,
-        "reviewed_total": 3,
-        "unresolved_review": 2,
-    }
-    assert payload["accepted_yield"] == pytest.approx(1 / 3)
-    assert (
-        payload["yield_denominator"]
-        == "accepted_label_count + review_count in the trusted import audit"
-    )
-    assert payload["production_prevalence_estimate"] is None
-    assert not hasattr(version, "gold_crops")
 
-    tampered = pq.read_table(gold).to_pylist()
-    tampered[0]["crop_id"] = "outside-queue"
-    _write_parquet(tmp_path / "outside.parquet", tampered)
-    with pytest.raises(ValueError, match="outside mining queue"):
-        record_mining_yield(
-            mined.queue,
-            tmp_path / "outside.parquet",
-            audit,
-            base_real_manifest=real,
-            output_dir=tmp_path / "rejected",
-        )
+    payload = json.loads(version.dataset_version.read_text(encoding="utf-8"))
+    assert payload["counts"]["accepted_pass"] == 1
+    assert payload["counts"]["accepted_total"] == 1
