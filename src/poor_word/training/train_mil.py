@@ -51,6 +51,7 @@ class MilArtifacts:
     checkpoint: Path
     metrics: Path
     attention_candidates: Path
+    image_scores: Path
 
 
 @dataclass(frozen=True)
@@ -312,7 +313,7 @@ def _evaluate(
     device: torch.device,
     pos_weight: float,
     instance_weight: float,
-) -> tuple[float, list[dict[str, object]]]:
+) -> tuple[float, list[dict[str, object]], list[dict[str, object]]]:
     model.eval()
     features, mask, labels, crop_ids = _batch(bags, device)
     with torch.inference_mode():
@@ -326,7 +327,21 @@ def _evaluate(
             normal_instance_weight=instance_weight,
         )
     candidates: list[dict[str, object]] = []
+    image_scores: list[dict[str, object]] = []
     for index, bag in enumerate(bags):
+        risk_score = float(torch.sigmoid(logits[index]).cpu())
+        image_scores.append(
+            {
+                "image_id": bag.image_id,
+                "fold": None,
+                "held_out_fold": None,
+                "image_label": ImageLabel.ABNORMAL.value
+                if bag.label == 1.0
+                else ImageLabel.NORMAL.value,
+                "risk_score": risk_score,
+                "zero_character": not crop_ids[index],
+            }
+        )
         if not crop_ids[index]:
             continue
         best = int(torch.argmax(attention[index]).item())
@@ -336,12 +351,12 @@ def _evaluate(
                 "crop_id": crop_ids[index][best],
                 "held_out_fold": None,
                 "attention": float(attention[index, best].cpu()),
-                "image_risk_score": float(torch.sigmoid(logits[index]).cpu()),
+                "image_risk_score": risk_score,
                 "label_source": "mil_attention_candidate",
                 "is_gold": False,
             }
         )
-    return float(loss.total.cpu()), candidates
+    return float(loss.total.cpu()), candidates, image_scores
 
 
 def _parquet_bytes(rows: list[dict[str, object]]) -> bytes:
@@ -354,6 +369,28 @@ def _parquet_bytes(rows: list[dict[str, object]]) -> bytes:
             ("image_risk_score", pa.float64()),
             ("label_source", pa.string()),
             ("is_gold", pa.bool_()),
+            ("checkpoint_sha256", pa.string()),
+            ("real_manifest_sha256", pa.string()),
+            ("fold_manifest_sha256", pa.string()),
+            ("feature_manifest_sha256", pa.string()),
+        ]
+    )
+    sink = pa.BufferOutputStream()
+    pq.write_table(
+        pa.Table.from_pylist(rows, schema=schema), sink, compression="zstd", version="2.6"
+    )
+    return cast(bytes, sink.getvalue().to_pybytes())
+
+
+def _image_score_parquet_bytes(rows: list[dict[str, object]]) -> bytes:
+    schema = pa.schema(
+        [
+            ("image_id", pa.string()),
+            ("fold", pa.int64()),
+            ("held_out_fold", pa.int64()),
+            ("image_label", pa.string()),
+            ("risk_score", pa.float64()),
+            ("zero_character", pa.bool_()),
             ("checkpoint_sha256", pa.string()),
             ("real_manifest_sha256", pa.string()),
             ("fold_manifest_sha256", pa.string()),
@@ -412,7 +449,7 @@ def train_mil_fold(config: MilTrainConfig) -> MilArtifacts:
             steps += 1
             if config.max_steps is not None and steps >= config.max_steps:
                 break
-        validation_loss, _ = _evaluate(
+        validation_loss, _, _ = _evaluate(
             model, validation, device, pos_weight, config.normal_instance_weight
         )
         history.append(
@@ -438,8 +475,13 @@ def train_mil_fold(config: MilTrainConfig) -> MilArtifacts:
     if best_state is None:
         raise RuntimeError("MIL training did not produce a best checkpoint")
     model.load_state_dict(best_state)
-    _, candidates = _evaluate(model, validation, device, pos_weight, config.normal_instance_weight)
+    _, candidates, image_scores = _evaluate(
+        model, validation, device, pos_weight, config.normal_instance_weight
+    )
     for row in candidates:
+        row["held_out_fold"] = config.held_out_fold
+    for row in image_scores:
+        row["fold"] = config.held_out_fold
         row["held_out_fold"] = config.held_out_fold
 
     hashes = {
@@ -488,9 +530,14 @@ def train_mil_fold(config: MilTrainConfig) -> MilArtifacts:
         checkpoint_hash = _sha256(checkpoint)
         for row in candidates:
             row.update({"checkpoint_sha256": checkpoint_hash, **hashes})
+        for row in image_scores:
+            row.update({"checkpoint_sha256": checkpoint_hash, **hashes})
         candidate_path = staging / "attention-candidates.parquet"
         candidate_path.write_bytes(_parquet_bytes(candidates))
         candidate_hash = _sha256(candidate_path)
+        image_score_path = staging / "image-scores.parquet"
+        image_score_path.write_bytes(_image_score_parquet_bytes(image_scores))
+        image_score_hash = _sha256(image_score_path)
         metrics = {
             "held_out_fold": config.held_out_fold,
             "train_image_ids": train_ids,
@@ -505,6 +552,7 @@ def train_mil_fold(config: MilTrainConfig) -> MilArtifacts:
             "history": history,
             "checkpoint_sha256": checkpoint_hash,
             "attention_candidates_sha256": candidate_hash,
+            "image_scores_sha256": image_score_hash,
             "feature_model_provenance": feature_model_provenance,
             **hashes,
             **provenance,
@@ -521,4 +569,5 @@ def train_mil_fold(config: MilTrainConfig) -> MilArtifacts:
         config.output_dir / "model.pt",
         config.output_dir / "metrics.json",
         config.output_dir / "attention-candidates.parquet",
+        config.output_dir / "image-scores.parquet",
     )

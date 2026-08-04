@@ -513,6 +513,7 @@ def test_mil_command_delegates_trusted_manifests_and_emits_outputs(
         checkpoint=tmp_path / "model.pt",
         metrics=tmp_path / "metrics.json",
         attention_candidates=tmp_path / "attention-candidates.parquet",
+        image_scores=tmp_path / "image-scores.parquet",
     )
     captured: list[object] = []
 
@@ -558,3 +559,66 @@ def test_mil_command_delegates_trusted_manifests_and_emits_outputs(
     assert f"checkpoint={artifacts.checkpoint}" in result.stdout
     assert f"metrics={artifacts.metrics}" in result.stdout
     assert f"attention_candidates={artifacts.attention_candidates}" in result.stdout
+    assert f"image_scores={artifacts.image_scores}" in result.stdout
+
+
+def test_real_seed_report_command_exposes_and_delegates_all_core_inputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    help_result = runner.invoke(cli.app, ["evaluate", "real-seed", "--help"])
+    assert help_result.exit_code == 0
+    for option in (
+        "--real-manifest",
+        "--fold-manifest",
+        "--crop-manifest",
+        "--gold-manifest",
+        "--character-oof",
+        "--image-oof",
+        "--ocr-manifest",
+        "--ocr-audit",
+        "--common-chars",
+        "--source-lock",
+        "--dependency-lock",
+        "--output-dir",
+        "--prevalence",
+    ):
+        assert option in help_result.stdout
+
+    artifacts = SimpleNamespace(
+        json_path=tmp_path / "report.json",
+        markdown_path=tmp_path / "report.md",
+        provenance_path=tmp_path / "report-provenance.json",
+    )
+    captured: list[object] = []
+
+    def fake_evaluate(config: object) -> object:
+        captured.append(config)
+        return artifacts
+
+    monkeypatch.setattr(cli, "evaluate_real_seed", fake_evaluate)
+    args = ["evaluate", "real-seed"]
+    values = {
+        "real-manifest": "real.parquet",
+        "fold-manifest": "folds.parquet",
+        "crop-manifest": "crops.parquet",
+        "gold-manifest": "gold.parquet",
+        "character-oof": "char.parquet",
+        "image-oof": "image.parquet",
+        "ocr-manifest": "ocr.parquet",
+        "ocr-audit": "audit.json",
+        "common-chars": "common.txt",
+        "source-lock": "source.json",
+        "dependency-lock": "uv.lock",
+        "output-dir": "report",
+    }
+    for option, value in values.items():
+        args.extend((f"--{option}", str(tmp_path / value)))
+    args.extend(("--prevalence", "0.001", "--threshold", "0.6"))
+    result = runner.invoke(cli.app, args)
+
+    assert result.exit_code == 0
+    assert len(captured) == 1
+    assert captured[0].image_oof == tmp_path / "image.parquet"
+    assert captured[0].prevalence == 0.001
+    assert captured[0].threshold == 0.6
+    assert f"json={artifacts.json_path}" in result.stdout

@@ -13,6 +13,7 @@ from poor_word.config import PathsConfig
 from poor_word.data.download import fetch_locked_source, lock_source
 from poor_word.data.manifest import SourceSpec, load_source_lock, load_source_specs
 from poor_word.evaluation.oof import collect_oof_scores
+from poor_word.evaluation.real_report import RealSeedReportConfig, evaluate_real_seed
 from poor_word.evaluation.report import evaluate_glyph_artifacts
 from poor_word.glyphs.catalog import load_common_chars
 from poor_word.glyphs.corrupt import OPERATORS
@@ -365,6 +366,7 @@ def train_mil_command(
     typer.echo(f"checkpoint={artifacts.checkpoint}")
     typer.echo(f"metrics={artifacts.metrics}")
     typer.echo(f"attention_candidates={artifacts.attention_candidates}")
+    typer.echo(f"image_scores={artifacts.image_scores}")
 
 
 @evaluate_app.command("glyph")
@@ -389,6 +391,49 @@ def evaluate_glyph_command(
     )
     typer.echo(f"json={report.json_path}")
     typer.echo(f"markdown={report.markdown_path}")
+
+
+@evaluate_app.command("real-seed")
+def evaluate_real_seed_command(
+    real_manifest: Annotated[Path, typer.Option("--real-manifest")],
+    fold_manifest: Annotated[Path, typer.Option("--fold-manifest")],
+    crop_manifest: Annotated[Path, typer.Option("--crop-manifest")],
+    gold_manifest: Annotated[Path, typer.Option("--gold-manifest")],
+    character_oof: Annotated[Path, typer.Option("--character-oof")],
+    image_oof: Annotated[Path, typer.Option("--image-oof")],
+    ocr_manifest: Annotated[Path, typer.Option("--ocr-manifest")],
+    ocr_audit: Annotated[Path, typer.Option("--ocr-audit")],
+    common_chars: Annotated[Path, typer.Option("--common-chars")],
+    source_lock: Annotated[Path, typer.Option("--source-lock")],
+    dependency_lock: Annotated[Path, typer.Option("--dependency-lock")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    prevalence: Annotated[
+        float, typer.Option("--prevalence", min=0.000001, max=0.999999)
+    ] = 0.001,
+    threshold: Annotated[float, typer.Option("--threshold", min=0, max=1)] = 0.5,
+) -> None:
+    """Compare aligned real development OOF scores without opening locked-test data."""
+    artifacts = evaluate_real_seed(
+        RealSeedReportConfig(
+            real_manifest=real_manifest,
+            fold_manifest=fold_manifest,
+            crop_manifest=crop_manifest,
+            gold_manifest=gold_manifest,
+            character_oof=character_oof,
+            image_oof=image_oof,
+            ocr_manifest=ocr_manifest,
+            ocr_audit=ocr_audit,
+            common_chars=common_chars,
+            source_lock=source_lock,
+            dependency_lock=dependency_lock,
+            output_dir=output_dir,
+            prevalence=prevalence,
+            threshold=threshold,
+        )
+    )
+    typer.echo(f"json={artifacts.json_path}")
+    typer.echo(f"markdown={artifacts.markdown_path}")
+    typer.echo(f"provenance={artifacts.provenance_path}")
 
 
 @real_data_app.command("import")

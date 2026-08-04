@@ -342,3 +342,69 @@ gold，重新验证队列内容版本、labels SHA-256、每一条 PASS/BLOCK/RE
 复制或改写 gold。分母明确为该次 import audit 的 `accepted_label_count + review_count`。
 候选是有偏采样，因此该 yield **不是现网异常率估计**；`0.001` 只作为现网基准率上下文，
 本命令不批准生产阈值。该流程是 CPU 元数据处理，无 L20/GPU 特殊要求。
+
+## 真实字符 OOF、图像 MIL 与阶段报告
+
+以下命令在 NVIDIA L20 的主 Python 3.12 uv 环境执行；PaddleOCR v5 server 仍在上文的
+隔离环境通过回环 HTTP endpoint 提供 OCR。真实字符模型按五折训练，每个开发字符只由
+未见过其所属折的模型评分：
+
+```bash
+uv run poor-word train real-oof \
+  --real-manifest data/real/versioned/seed-v1/manifest.parquet \
+  --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet \
+  --gold-manifest data/real/versioned/seed-v1/gold-v1/gold-crops.parquet \
+  --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet \
+  --synthetic-manifest data/generated/mvp-v1/manifest.parquet \
+  --adapted-checkpoint artifacts/glyph-real-adapt-v1/encoder.pt \
+  --output-dir artifacts/real-oof-v1 \
+  --device cuda --epochs 10 --batch-size 64
+
+# held-out-fold 需要依次执行 0、1、2、3、4
+uv run poor-word train mil \
+  --real-manifest data/real/versioned/seed-v1/manifest.parquet \
+  --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet \
+  --feature-manifest artifacts/real-oof-v1/oof/oof.parquet \
+  --held-out-fold 0 --output-dir artifacts/mil-v1/fold-0 \
+  --device cuda --epochs 30 --batch-size 32
+```
+
+每个 MIL 折输出 `image-scores.parquet`，对该折每张合规验证图片恰有一行，包括没有检测到
+字符的 zero-character bag；`attention-candidates.parquet` 仍只是人工诊断候选，不能冒充
+全量图像 OOF 分数。运行编排应只拼接五个冻结的 `image-scores.parquet` 为一个不可变
+`image-oof.parquet`，不得重采样、过滤或去掉 zero-character 行；报告入口会再次验证 ID、
+fold、label、checkpoint 和所有输入 SHA-256，并拒绝漏行、多行或任何 locked-test 行。
+
+PP-OCRv5 server 的字符基线清单必须对每个字符 OOF ID 恰有一行，包含 `crop_id`、
+`image_id`、`fold`、`decision`、`anomaly_kind`、单字符 `text`、`ocr_confidence`、
+`ocr_model_id=PP-OCRv5_server_rec`、对应 `ocr_audit_sha256`，以及可选的独立
+`visual_anomaly_score`。合法 CJK 字即使不在 3500 常用字表也只标记
+`out_of_catalog/needs_review`；没有独立视觉异常证据时不得自动 BLOCK。
+
+```bash
+uv run poor-word ocr audit \
+  --endpoint http://127.0.0.1:8765 \
+  --image-dir data/real/seed/images --warmup 10 --runs 30 \
+  --output artifacts/ocr-audit-l20.json
+
+uv run poor-word evaluate real-seed \
+  --real-manifest data/real/versioned/seed-v1/manifest.parquet \
+  --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet \
+  --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet \
+  --gold-manifest data/real/versioned/seed-v1/gold-v1/gold-crops.parquet \
+  --character-oof artifacts/real-oof-v1/oof/oof.parquet \
+  --image-oof artifacts/mil-v1/image-oof.parquet \
+  --ocr-manifest artifacts/ocr-character-scores.parquet \
+  --ocr-audit artifacts/ocr-audit-l20.json \
+  --common-chars data/raw/common_chars_3500.txt \
+  --source-lock data/locks/common_chars_3500.lock.json \
+  --dependency-lock uv.lock --prevalence 0.001 \
+  --output-dir artifacts/real-seed-report-v1
+```
+
+输出为原子发布的 `report.json`、`report.md` 和记录两者 SHA-256 的
+`report-provenance.json`。字符和图像均报告原始样本数、AUCPR、固定阈值混淆矩阵、Recall/
+FPR 的 Wilson 95% 区间、异常类型召回及按 0.1% 基率重算的 PPV；`REVIEW` 只进入 review
+rate，不进入监督指标。当正常负样本少于 10,000、真实 BLOCK 不足、缺少 normal replay，
+或尚未通过受控流程运行 locked test 时，报告固定包含醒目的 `Not a pilot approval`，并把
+结论写为 `inconclusive`，不会外推 FPR 或把挖掘/平衡样本 precision 当作生产 PPV。

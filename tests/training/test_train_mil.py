@@ -178,6 +178,19 @@ def test_training_is_fold_safe_balanced_and_publishes_best_atomically(tmp_path: 
     assert metrics["attention_candidates_sha256"] == _sha256(
         artifacts.attention_candidates
     )
+    image_scores = pq.read_table(artifacts.image_scores).to_pylist()
+    assert {row["image_id"] for row in image_scores} == {
+        "abnormal-valid",
+        "empty-valid",
+        "normal-valid",
+    }
+    assert len(image_scores) == 3
+    empty = next(row for row in image_scores if row["image_id"] == "empty-valid")
+    assert empty["zero_character"] is True
+    assert empty["image_label"] == "NORMAL"
+    assert empty["fold"] == 0
+    assert all(row["checkpoint_sha256"] == _sha256(artifacts.checkpoint) for row in image_scores)
+    assert metrics["image_scores_sha256"] == _sha256(artifacts.image_scores)
 
 
 @pytest.mark.parametrize(
