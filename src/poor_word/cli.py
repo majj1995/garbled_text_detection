@@ -18,6 +18,7 @@ from poor_word.glyphs.corrupt import OPERATORS
 from poor_word.glyphs.generate import GenerationConfig, generate_dataset
 from poor_word.ocr.paddle_v5 import PaddleV5Adapter
 from poor_word.real_data.ingest import import_real_dataset
+from poor_word.real_data.split import assign_group_folds
 from poor_word.training.train_glyph import TrainConfig, train_glyph
 
 app = typer.Typer(no_args_is_help=True)
@@ -253,3 +254,19 @@ def real_data_import_command(
     typer.echo(f"manifest={artifacts.manifest}")
     typer.echo(f"dataset={artifacts.dataset_metadata}")
     typer.echo(f"validation={artifacts.validation_report}")
+
+
+@real_data_app.command("split")
+def real_data_split_command(
+    manifest: Annotated[Path, typer.Option("--manifest")],
+    image_root: Annotated[Path, typer.Option("--image-root")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    folds: Annotated[int, typer.Option("--folds", min=2)] = 5,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
+) -> None:
+    """Assign leakage-safe group folds with exact and perceptual duplicate closure."""
+    artifacts = assign_group_folds(
+        manifest, image_root, output_dir, folds=folds, seed=seed
+    )
+    typer.echo(f"folds={artifacts.folds}")
+    typer.echo(f"audit={artifacts.audit}")

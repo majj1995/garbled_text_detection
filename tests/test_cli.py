@@ -167,3 +167,31 @@ def test_real_data_import_command_emits_versioned_artifacts(
     assert result.exit_code == 0
     assert f"manifest={paths.manifest}" in result.stdout
     assert f"validation={paths.validation_report}" in result.stdout
+
+
+def test_real_data_split_command_emits_fold_audit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    paths = SimpleNamespace(
+        folds=tmp_path / "folds.parquet",
+        audit=tmp_path / "split-audit.json",
+    )
+    monkeypatch.setattr(cli, "assign_group_folds", lambda *_args, **_kwargs: paths)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "real-data",
+            "split",
+            "--manifest",
+            str(tmp_path / "manifest.parquet"),
+            "--image-root",
+            str(tmp_path / "input"),
+            "--output-dir",
+            str(tmp_path / "split"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"folds={paths.folds}" in result.stdout
+    assert f"audit={paths.audit}" in result.stdout

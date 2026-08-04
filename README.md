@@ -164,7 +164,7 @@ uv run mypy src
 字符金标只接受带人工 `annotator_id` 的 `PASS`/`BLOCK`；未确认项写为 `REVIEW`。
 
 ```json
-{"image_id":"case-001","image_path":"images/case-001.png","expected_sha256":"<64位小写SHA-256>","image_label":"ABNORMAL","split_role":"DEV","source_id":"business_seed","license_id":"LicenseRef-Proprietary","production_allowed":true,"product_id":"product-1","campaign_id":"campaign-1","template_id":"template-1","label_provenance":"human-image-review-v1","training_eligible":true,"characters":[{"annotation_id":"case-001-char-1","box":{"x0":12,"y0":20,"x1":58,"y1":76},"decision":"BLOCK","annotator_id":"reviewer-1","anomaly_kind":"missing_stroke"}]}
+{"image_id":"case-001","image_path":"images/case-001.png","expected_sha256":"<64位小写SHA-256>","image_label":"ABNORMAL","split_role":"DEV","source_id":"business_seed","source_group_id":"upload-batch-1","license_id":"LicenseRef-Proprietary","production_allowed":true,"product_id":"product-1","campaign_id":"campaign-1","template_id":"template-1","label_provenance":"human-image-review-v1","training_eligible":true,"characters":[{"annotation_id":"case-001-char-1","box":{"x0":12,"y0":20,"x1":58,"y1":76},"decision":"BLOCK","annotator_id":"reviewer-1","anomaly_kind":"missing_stroke"}]}
 ```
 
 ```bash
@@ -177,3 +177,19 @@ uv run poor-word real-data import \
 输出 `manifest.parquet`、`dataset.json`、`validation.json`；后者审计 60 张开发异常、
 20 张锁定异常和 20 张困难正常的目标差额。`LOCKED_TEST` 或未获生产许可的数据不能
 标记为可训练。已有输出内容不一致时导入器拒绝覆盖，以保护数据版本不可变性。
+
+导入后按商品、活动、模板、上传/生成来源组、精确 SHA 重复和 pHash 近重复的传递闭包
+分配五折。`source_id` 只表示许可来源，`source_group_id` 表示需要防泄漏的上传批次、
+生成器或业务流。`--image-root` 是原始 JSONL 所在、包含 `images/` 的目录。
+
+```bash
+uv run poor-word real-data split \
+  --manifest data/real/versioned/seed-v1/manifest.parquet \
+  --image-root data/real/seed \
+  --folds 5 \
+  --seed 20260804 \
+  --output-dir data/real/versioned/seed-v1/split-v1
+```
+
+输出 `folds.parquet` 和 `split-audit.json`。锁定测试统一为 `fold=-1`；若它与开发集
+存在任何分组或近重复连通关系，命令直接失败，要求先修正数据划分。

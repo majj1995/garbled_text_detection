@@ -26,6 +26,7 @@ def _image(**changes: object) -> RealImageRecord:
         "image_label": ImageLabel.NORMAL,
         "split_role": SplitRole.DEV,
         "source_id": "business_seed",
+        "source_group_id": "upload-batch-1",
         "license_id": "LicenseRef-Proprietary",
         "production_allowed": True,
         "product_id": "product-1",

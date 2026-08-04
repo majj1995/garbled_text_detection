@@ -23,6 +23,7 @@ def _record(image_id: str, image_path: str, *, expected_sha256: str) -> dict[str
         "image_label": "ABNORMAL",
         "split_role": "DEV",
         "source_id": "business_seed",
+        "source_group_id": f"upload-{image_id}",
         "license_id": "LicenseRef-Proprietary",
         "production_allowed": True,
         "product_id": f"product-{image_id}",

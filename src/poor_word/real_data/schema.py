@@ -44,6 +44,7 @@ class RealImageRecord(BaseModel):
     image_label: ImageLabel
     split_role: SplitRole
     source_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    source_group_id: str = Field(min_length=1)
     license_id: str = Field(min_length=1)
     production_allowed: bool
     product_id: str = Field(min_length=1)

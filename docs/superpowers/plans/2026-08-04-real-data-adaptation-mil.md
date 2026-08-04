@@ -50,7 +50,9 @@ read-only to training code.
 **Interfaces:**
 
 - JSONL input records contain `image_id`, `image_path`, `image_label`, `split_role`,
-  `source_id`, `product_id`, `campaign_id`, `template_id`, and optional character records.
+  `source_id`, `source_group_id`, `product_id`, `campaign_id`, `template_id`, and optional
+  character records. `source_id` identifies licensing provenance; `source_group_id` is the
+  leakage-control batch/generator/feed identity.
 - `CharacterAnnotation` contains a positive-area box, `PASS|BLOCK|REVIEW`, optional text,
   anomaly kind, and annotator provenance.
 - `import_real_dataset(input_jsonl, output_dir) -> RealDatasetArtifacts` writes
