@@ -12,6 +12,13 @@ uv run poor-word doctor
 
 本地 CPU 开发使用 Python 3.12。GPU 训练和 PP-OCRv5 server 审计在 NVIDIA L20
 实验机的 Python 3.11 环境执行；CPU 单元测试不初始化 PaddlePaddle 或 CUDA。
+
+若 Intel macOS 将 `.venv` 目录树标记为 hidden，Python 3.12 会跳过 editable
+安装使用的 `.pth` 文件并报 `ModuleNotFoundError: poor_word`。可在同步后执行一次：
+
+```bash
+chflags -R nohidden .venv
+```
 工程兼容 Python 3.11–3.12。Intel macOS 本地环境使用最后一组提供对应 wheel 的
 PyTorch 2.2.2；Linux/L20 训练环境使用 PyTorch 2.7.1，由根目录 `uv.lock` 管理。
 
