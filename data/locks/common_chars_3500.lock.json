@@ -1,0 +1,10 @@
+{
+  "source_id": "common_chars_3500",
+  "declared_url": "https://raw.githubusercontent.com/lqfeng/ChineseCharacters/master/%E9%80%9A%E7%94%A8%E8%A7%84%E8%8C%83%E6%B1%89%E5%AD%97%E8%A1%A8%282013%29%E4%B8%80%E7%BA%A7%E5%AD%97%E8%A1%A8%283500%E5%AD%97%29.txt",
+  "resolved_url": "https://raw.githubusercontent.com/lqfeng/ChineseCharacters/master/%E9%80%9A%E7%94%A8%E8%A7%84%E8%8C%83%E6%B1%89%E5%AD%97%E8%A1%A8%282013%29%E4%B8%80%E7%BA%A7%E5%AD%97%E8%A1%A8%283500%E5%AD%97%29.txt",
+  "output_name": "common_chars_3500.txt",
+  "sha256": "4aac5efd4e149898e00829b16394e7c74aa2d78b7382ed2a069cbf69bf188858",
+  "size_bytes": 52399,
+  "license_id": "Apache-2.0",
+  "production_allowed": true
+}

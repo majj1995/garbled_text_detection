@@ -1,0 +1,1 @@
+"""License-aware source acquisition."""

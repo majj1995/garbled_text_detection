@@ -1,0 +1,13 @@
+[[source]]
+source_id = "common_chars_3500"
+url = "https://raw.githubusercontent.com/lqfeng/ChineseCharacters/master/%E9%80%9A%E7%94%A8%E8%A7%84%E8%8C%83%E6%B1%89%E5%AD%97%E8%A1%A8%282013%29%E4%B8%80%E7%BA%A7%E5%AD%97%E8%A1%A8%283500%E5%AD%97%29.txt"
+license_id = "Apache-2.0"
+production_allowed = true
+output_name = "common_chars_3500.txt"
+
+[[source]]
+source_id = "noto_sans_sc_regular"
+url = "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf"
+license_id = "OFL-1.1"
+production_allowed = true
+output_name = "NotoSansCJKsc-Regular.otf"

@@ -28,3 +28,17 @@ uv sync --all-groups
 # 独立 PP-OCRv5 server 环境
 uv sync --project environments/ocr
 ```
+
+## 锁定数据源
+
+来源声明记录在 `data/sources.toml`。`lock` 首次下载并记录重定向后的 URL、文件大小、
+SHA-256、SPDX 许可证标识和生产使用决策；`fetch` 只接受与锁文件一致的内容。
+
+```bash
+uv run poor-word data lock --source-id common_chars_3500
+uv run poor-word data lock --source-id noto_sans_sc_regular
+uv run poor-word data fetch --source-id common_chars_3500
+uv run poor-word data fetch --source-id noto_sans_sc_regular
+```
+
+下载内容保存在被 Git 忽略的 `data/raw`，可审计锁文件保存在 `data/locks`。
