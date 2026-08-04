@@ -49,3 +49,22 @@ uv run poor-word data fetch --source-id noto_sans_sc_regular
 ```
 
 下载内容保存在被 Git 忽略的 `data/raw`，可审计锁文件保存在 `data/locks`。
+
+## 生成合成字形
+
+```bash
+# 10 个字符、全部五类异常算子的快速复现检查
+uv run poor-word glyphs generate \
+  --profile smoke \
+  --seed 20260804 \
+  --output-dir data/generated/smoke
+
+# 3500 字 MVP 数据（建议在算力机执行）
+uv run poor-word glyphs generate \
+  --profile mvp \
+  --seed 20260804 \
+  --output-dir data/generated/mvp
+```
+
+每次运行输出 `manifest.parquet` 和 `run.json`。不满足变化像素与拓扑后置条件的
+异常候选会计入 `skipped_count`，不会作为 BLOCK 样本写入。
