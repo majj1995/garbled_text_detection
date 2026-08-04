@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from torch import Tensor
 from torch.nn import functional as functional
 
+from poor_word.real_data.schema import SplitRole
 from poor_word.training.train_glyph import GlyphClassifier, TrainConfig
 
 
@@ -31,7 +32,7 @@ class AdaptConfig(BaseModel):
     output_dir: Path
     epochs: int = Field(default=20, ge=1)
     max_steps: int | None = Field(default=None, ge=1)
-    batch_size: int = Field(default=64, ge=1)
+    batch_size: int = Field(default=64, ge=2)
     seed: int = Field(default=20260804, ge=0)
     device: str = "cuda"
     learning_rate: float = Field(default=3e-5, gt=0)
@@ -82,6 +83,7 @@ def _atomic_json(path: Path, payload: dict[str, object]) -> None:
 def _load_eligible_crops(crop_manifest: Path, real_manifest: Path) -> list[_Crop]:
     source_rows = cast(list[dict[str, Any]], pq.read_table(real_manifest).to_pylist())
     sources: dict[str, dict[str, Any]] = {}
+    valid_split_roles = {role.value for role in SplitRole}
     for row in source_rows:
         image_id = row.get("image_id")
         if not isinstance(image_id, str) or not image_id:
@@ -90,6 +92,11 @@ def _load_eligible_crops(crop_manifest: Path, real_manifest: Path) -> list[_Crop
             raise ValueError(f"real manifest has duplicate image_id: {image_id}")
         if "training_eligible" not in row or "split_role" not in row:
             raise ValueError("real manifest row is missing training eligibility or split role")
+        if not isinstance(row["training_eligible"], bool):
+            raise ValueError("real manifest has malformed training_eligible")
+        split_role = row["split_role"]
+        if not isinstance(split_role, str) or split_role not in valid_split_roles:
+            raise ValueError("real manifest has malformed split_role")
         sources[image_id] = row
 
     root = crop_manifest.parent.resolve()
@@ -114,7 +121,10 @@ def _load_eligible_crops(crop_manifest: Path, real_manifest: Path) -> list[_Crop
             raise ValueError(f"crop manifest has duplicate crop_id: {crop_id}")
         seen_crop_ids.add(crop_id)
         source = sources[image_id]
-        if not bool(source["training_eligible"]) or str(source["split_role"]) == "LOCKED_TEST":
+        if (
+            source["training_eligible"] is not True
+            or source["split_role"] == SplitRole.LOCKED_TEST.value
+        ):
             continue
         resolved = (root / crop_path).resolve()
         try:
@@ -181,7 +191,7 @@ def _photometric_view(images: Tensor, generator: torch.Generator) -> Tensor:
 
 def _contrastive_loss(first: Tensor, second: Tensor) -> Tensor:
     if len(first) < 2:
-        return first.sum() * 0.0
+        raise ValueError("contrastive adaptation requires at least two crops per batch")
     embeddings = torch.cat((first, second), dim=0)
     similarities = embeddings @ embeddings.T / 0.15
     count = len(embeddings)
@@ -243,6 +253,8 @@ def adapt_real_encoder(config: AdaptConfig) -> AdaptArtifacts:
     train_crops, diagnostic_crops = _diagnostic_split(
         eligible, config.seed, config.diagnostic_fraction
     )
+    if len(train_crops) < 2:
+        raise ValueError("at least two training crops are required after diagnostic split")
     classifier, prior = _restore_classifier(config.prior_checkpoint)
     encoder = classifier.encoder.to(device)
     cpu_smoke = device.type == "cpu" and config.max_steps is not None and config.max_steps <= 2
@@ -256,12 +268,16 @@ def adapt_real_encoder(config: AdaptConfig) -> AdaptArtifacts:
     before = _embedding_summary(encoder, diagnostic_crops, device)
     generator = torch.Generator().manual_seed(config.seed)
     history: list[dict[str, float]] = []
+    dropped_singleton_tail_batches = 0
     step = 0
     encoder.train()
     for _epoch in range(config.epochs):
         order = torch.randperm(len(train_crops), generator=generator).tolist()
         for start in range(0, len(order), config.batch_size):
             selected = [train_crops[index] for index in order[start : start + config.batch_size]]
+            if len(selected) < 2:
+                dropped_singleton_tail_batches += 1
+                continue
             images = _load_batch(selected, device)
             first = encoder(_photometric_view(images, generator))
             second = encoder(_photometric_view(images, generator))
@@ -320,6 +336,7 @@ def adapt_real_encoder(config: AdaptConfig) -> AdaptArtifacts:
             "eligible_crop_count": len(eligible),
             "train_crop_count": len(train_crops),
             "diagnostic_crop_count": len(diagnostic_crops),
+            "dropped_singleton_tail_batches": dropped_singleton_tail_batches,
             "diagnostic_subset": "deterministic eligible-only heldout subset",
             "loss_history": history,
             "steps": step,

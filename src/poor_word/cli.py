@@ -237,7 +237,7 @@ def train_adapt_real_command(
     output_dir: Annotated[Path, typer.Option("--output-dir")],
     epochs: Annotated[int, typer.Option("--epochs", min=1)] = 20,
     max_steps: Annotated[int | None, typer.Option("--max-steps", min=1)] = None,
-    batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 64,
+    batch_size: Annotated[int, typer.Option("--batch-size", min=2)] = 64,
     seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
     device: Annotated[str, typer.Option("--device")] = "cuda",
     learning_rate: Annotated[float, typer.Option("--learning-rate", min=0.0000001)] = 3e-5,

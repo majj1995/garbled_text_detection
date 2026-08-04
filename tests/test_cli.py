@@ -176,6 +176,33 @@ def test_adapt_real_command_emits_adapted_artifact_paths(
     assert f"metrics={artifacts.metrics}" in result.stdout
 
 
+def test_adapt_real_command_rejects_singleton_batch_size(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Break caught: CLI accepts a batch size that cannot form a contrastive pair."""
+    monkeypatch.setattr(cli, "adapt_real_encoder", lambda _config: None)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "train",
+            "adapt-real",
+            "--crop-manifest",
+            str(tmp_path / "crops.parquet"),
+            "--real-manifest",
+            str(tmp_path / "real.parquet"),
+            "--prior-checkpoint",
+            str(tmp_path / "prior.pt"),
+            "--output-dir",
+            str(tmp_path / "adapted"),
+            "--batch-size",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 2
+
+
 def test_real_data_import_command_emits_versioned_artifacts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

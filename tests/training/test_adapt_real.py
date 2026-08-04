@@ -135,3 +135,109 @@ def test_adaptation_rejects_duplicate_source_image_ids(tmp_path: Path) -> None:
                 device="cpu",
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("training_eligible", "false"),
+        ("split_role", None),
+        ("split_role", "UNRECOGNIZED_ROLE"),
+    ),
+)
+def test_adaptation_rejects_malformed_source_eligibility(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    """Break caught: malformed source values can become training admission."""
+    crops, manifest, checkpoint, _locked = _real_crop_inputs(tmp_path)
+    rows = pq.read_table(manifest).to_pylist()
+    for row in rows:
+        row[field] = value
+    _write_parquet(manifest, rows)
+
+    with pytest.raises(ValueError, match="malformed"):
+        adapt_real_encoder(
+            AdaptConfig(
+                crop_manifest=crops,
+                real_manifest=manifest,
+                prior_checkpoint=checkpoint,
+                output_dir=tmp_path / "adapted",
+                max_steps=1,
+                batch_size=2,
+                device="cpu",
+            )
+        )
+
+
+def test_adaptation_rejects_singleton_train_set_after_diagnostic_split(tmp_path: Path) -> None:
+    """Break caught: a one-crop contrastive batch writes an unadapted artifact."""
+    crops, manifest, checkpoint, _locked = _real_crop_inputs(tmp_path)
+    crop_rows = [row for row in pq.read_table(crops).to_pylist() if row["crop_id"] != "dev-c"]
+    source_rows = [
+        row for row in pq.read_table(manifest).to_pylist() if row["image_id"] != "image-c"
+    ]
+    _write_parquet(crops, crop_rows)
+    _write_parquet(manifest, source_rows)
+
+    with pytest.raises(ValueError, match="at least two training crops"):
+        adapt_real_encoder(
+            AdaptConfig(
+                crop_manifest=crops,
+                real_manifest=manifest,
+                prior_checkpoint=checkpoint,
+                output_dir=tmp_path / "adapted",
+                max_steps=1,
+                batch_size=2,
+                device="cpu",
+            )
+        )
+    assert not (tmp_path / "adapted" / "encoder.pt").exists()
+
+
+def test_adaptation_rejects_singleton_batch_size(tmp_path: Path) -> None:
+    """Break caught: batch size one silently records a zero contrastive step."""
+    crops, manifest, checkpoint, _locked = _real_crop_inputs(tmp_path)
+
+    with pytest.raises(ValueError, match="greater than or equal to 2"):
+        AdaptConfig(
+            crop_manifest=crops,
+            real_manifest=manifest,
+            prior_checkpoint=checkpoint,
+            output_dir=tmp_path / "adapted",
+            batch_size=1,
+            device="cpu",
+        )
+
+
+def test_adaptation_drops_singleton_tail_batch(tmp_path: Path) -> None:
+    """Break caught: a singleton tail is counted as a zero-loss adaptation step."""
+    crops, manifest, checkpoint, locked_crop = _real_crop_inputs(tmp_path)
+    Image.new("RGB", (16, 12), "blue").save(locked_crop.parent / "dev-d.png")
+    crop_rows = pq.read_table(crops).to_pylist()
+    crop_rows.append(
+        {"crop_id": "dev-d", "image_id": "image-d", "crop_path": "images/dev-d.png"}
+    )
+    source_rows = pq.read_table(manifest).to_pylist()
+    source_rows.append(
+        {"image_id": "image-d", "training_eligible": True, "split_role": "DEV"}
+    )
+    _write_parquet(crops, crop_rows)
+    _write_parquet(manifest, source_rows)
+
+    artifacts = adapt_real_encoder(
+        AdaptConfig(
+            crop_manifest=crops,
+            real_manifest=manifest,
+            prior_checkpoint=checkpoint,
+            output_dir=tmp_path / "adapted",
+            epochs=1,
+            max_steps=2,
+            batch_size=2,
+            device="cpu",
+        )
+    )
+
+    metrics = json.loads(artifacts.metrics.read_text(encoding="utf-8"))
+    assert metrics["steps"] == 1
+    assert len(metrics["loss_history"]) == 1
+    assert metrics["loss_history"][0]["contrastive"] > 0.0
