@@ -16,14 +16,17 @@ from poor_word.glyphs.catalog import load_common_chars
 from poor_word.glyphs.corrupt import OPERATORS
 from poor_word.glyphs.generate import GenerationConfig, generate_dataset
 from poor_word.ocr.paddle_v5 import PaddleV5Adapter
+from poor_word.training.train_glyph import TrainConfig, train_glyph
 
 app = typer.Typer(no_args_is_help=True)
 data_app = typer.Typer(no_args_is_help=True)
 glyphs_app = typer.Typer(no_args_is_help=True)
 ocr_app = typer.Typer(no_args_is_help=True)
+train_app = typer.Typer(no_args_is_help=True)
 app.add_typer(data_app, name="data")
 app.add_typer(glyphs_app, name="glyphs")
 app.add_typer(ocr_app, name="ocr")
+app.add_typer(train_app, name="train")
 
 
 @app.callback()
@@ -179,3 +182,32 @@ def ocr_audit(
     )
     if not server_models or not audit.character_boxes_available:
         raise typer.Exit(code=2)
+
+
+@train_app.command("glyph")
+def train_glyph_command(
+    manifest: Annotated[Path, typer.Option("--manifest")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    epochs: Annotated[int, typer.Option("--epochs", min=1)] = 20,
+    max_steps: Annotated[int | None, typer.Option("--max-steps", min=1)] = None,
+    batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 256,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
+    device: Annotated[str, typer.Option("--device")] = "cuda",
+    pretrained: Annotated[bool, typer.Option("--pretrained/--no-pretrained")] = False,
+) -> None:
+    """Train the glyph encoder and build its legal-character prototype bank."""
+    artifacts = train_glyph(
+        TrainConfig(
+            manifest=manifest,
+            output_dir=output_dir,
+            epochs=epochs,
+            max_steps=max_steps,
+            batch_size=batch_size,
+            seed=seed,
+            pretrained=pretrained,
+            device=device,
+        )
+    )
+    typer.echo(f"checkpoint={artifacts.checkpoint}")
+    typer.echo(f"prototypes={artifacts.prototype_bank}")
+    typer.echo(f"metrics={artifacts.metrics}")

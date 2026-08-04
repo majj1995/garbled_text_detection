@@ -90,3 +90,22 @@ uv run poor-word glyphs generate \
 
 每次运行输出 `manifest.parquet` 和 `run.json`。不满足变化像素与拓扑后置条件的
 异常候选会计入 `skipped_count`，不会作为 BLOCK 样本写入。
+
+## 训练字形基线
+
+```bash
+# 本机只做两步工程冒烟，ConvNeXt 特征层会冻结
+uv run poor-word train glyph \
+  --manifest data/generated/smoke-a/manifest.parquet \
+  --epochs 1 --max-steps 2 --batch-size 4 --device cpu \
+  --output-dir artifacts/train-smoke
+
+# L20 完整训练
+uv run poor-word train glyph \
+  --manifest data/generated/mvp-v1/manifest.parquet \
+  --epochs 20 --batch-size 256 --device cuda --pretrained \
+  --output-dir artifacts/glyph-mvp-v1
+```
+
+训练输出 `encoder.pt`、`prototypes.npz/.json` 和 `metrics.json`；metrics 记录三项
+损失、验证集最近原型准确率、合成 OOD AUCPR、Git/uv/manifest 哈希及运行时间。
