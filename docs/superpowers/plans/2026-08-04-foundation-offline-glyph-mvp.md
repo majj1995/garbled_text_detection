@@ -4,13 +4,13 @@
 
 **Goal:** Build a reproducible Python/uv project that downloads license-tracked seed assets, creates deterministically labeled normal and malformed Chinese glyphs, audits PP-OCRv5 server output, trains a first open-set glyph encoder, and reports offline metrics at the 0.1% production base rate.
 
-**Architecture:** This plan delivers the first independently testable subsystem from the approved design. Data acquisition, glyph generation, OCR adaptation, embedding/prototype scoring, and evaluation communicate through typed domain models and Parquet manifests. GPU-specific PP-OCRv5 checks run on the L20 experiment host; all unit tests and a reduced synthetic smoke run remain CPU-compatible.
+**Architecture:** This plan delivers the first independently testable subsystem from the approved design. Data acquisition, glyph generation, OCR adaptation, embedding/prototype scoring, and evaluation communicate through typed domain models and Parquet manifests. GPU-specific PP-OCRv5 checks run in an isolated Python 3.11 uv environment on the L20 experiment host; its package metadata remains compatible with Python 3.12 so the universal lock can be generated on the local host. The PyTorch project and Paddle runtime never share a lock file or process. All unit tests and a reduced synthetic smoke run remain CPU-compatible.
 
-**Tech Stack:** Python 3.11, uv, PyTorch/torchvision, PaddleOCR 3.2+ with PP-OCRv5 server, OpenCV, Pillow, scikit-image, NumPy, PyArrow/Parquet, Pydantic, Typer, httpx, scikit-learn, pytest, Ruff, mypy.
+**Tech Stack:** Python 3.11–3.12, uv, PyTorch/torchvision, PaddleOCR 3.2+ with PP-OCRv5 server, OpenCV, Pillow, scikit-image, NumPy, PyArrow/Parquet, Pydantic, Typer, httpx, scikit-learn, pytest, Ruff, mypy.
 
 ## Global Constraints
 
-- Python is exactly the 3.11 minor line; `uv.lock` is the dependency source of truth.
+- The main package supports Python 3.11–3.12; local development pins 3.12. PP-OCRv5 uses `environments/ocr` with Python 3.11 and its own `uv.lock` because PaddlePaddle GPU and CUDA PyTorch pin incompatible NVIDIA runtime packages.
 - The OCR models are `PP-OCRv5_server_det` and `PP-OCRv5_server_rec`; mobile models are out of scope.
 - The L20 experiment GPU has 48 GB memory, but CPU tests must not import PaddlePaddle or initialize CUDA.
 - Legal characters default to the 3,500 characters in the 2013 first-level General Standard Chinese Character table.
@@ -25,7 +25,10 @@
 
 ```text
 pyproject.toml                         # uv metadata, dependencies, tools, CLI entry point
-.python-version                       # pins Python 3.11
+.python-version                       # pins local Python 3.12
+environments/ocr/pyproject.toml        # isolated PaddleOCR/PaddlePaddle GPU runtime
+environments/ocr/.python-version       # pins OCR runtime Python 3.11
+environments/ocr/uv.lock               # OCR-only dependency lock
 README.md                             # setup and reproducible MVP commands
 data/sources.toml                     # reviewed source declarations
 src/poor_word/cli.py                  # Typer command tree
@@ -50,11 +53,13 @@ tests/                                # unit and integration tests mirroring src
 
 ---
 
-### Task 1: Initialize the Python 3.11 uv project and quality gates
+### Task 1: Initialize the Python 3.12 uv project and quality gates
 
 **Files:**
 - Create: `.python-version`
 - Create: `pyproject.toml`
+- Create: `environments/ocr/.python-version`
+- Create: `environments/ocr/pyproject.toml`
 - Create: `README.md`
 - Create: `src/poor_word/__init__.py`
 - Create: `src/poor_word/cli.py`
@@ -62,7 +67,7 @@ tests/                                # unit and integration tests mirroring src
 
 **Interfaces:**
 - Consumes: no project code.
-- Produces: `poor-word` CLI entry point and a locked Python 3.11 development environment used by every later task.
+- Produces: `poor-word` CLI entry point, a locked local Python 3.12/PyTorch environment, and a separately locked L20 Python 3.11/PaddleOCR environment.
 
 - [ ] **Step 1: Write the package and CLI smoke test**
 
@@ -77,7 +82,7 @@ def test_package_version_and_doctor() -> None:
     assert __version__ == "0.1.0"
     result = CliRunner().invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "python=3.11" in result.stdout
+    assert "python=3.12" in result.stdout
     assert "gpu=not-required-for-unit-tests" in result.stdout
 ```
 
@@ -95,7 +100,7 @@ Use this dependency layout in `pyproject.toml`:
 [project]
 name = "poor-word"
 version = "0.1.0"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.11,<3.13"
 dependencies = [
   "httpx>=0.28,<1",
   "numpy>=2,<3",
@@ -109,12 +114,6 @@ dependencies = [
   "torch>=2.6,<3",
   "torchvision>=0.21,<1",
   "typer>=0.15,<1",
-]
-
-[project.optional-dependencies]
-ocr = [
-  "paddleocr>=3.2,<4",
-  "paddlepaddle-gpu>=3.1,<4; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
 [dependency-groups]
@@ -140,12 +139,12 @@ target-version = "py311"
 select = ["E", "F", "I", "B", "UP", "RUF"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 packages = ["poor_word"]
 ```
 
-Set `.python-version` to `3.11`. Implement `doctor` without importing torch or Paddle:
+Set `.python-version` to `3.12`. Add an isolated `environments/ocr` uv project pinned to Python 3.11 with PaddleOCR 3.2+ and PaddlePaddle GPU 3.3.0 from Paddle's official CUDA 12.6 index. Implement `doctor` without importing torch or Paddle:
 
 ```python
 import platform
@@ -162,11 +161,11 @@ def doctor() -> None:
     typer.echo("gpu=not-required-for-unit-tests")
 ```
 
-- [ ] **Step 4: Install Python 3.11 and lock dependencies**
+- [ ] **Step 4: Install local Python 3.12 and lock dependencies**
 
-Run: `uv python install 3.11 && uv sync --all-groups && uv lock --check`
+Run: `uv python install 3.12 && uv sync --all-groups && uv lock --check && uv lock --project environments/ocr --check`
 
-Expected: Python 3.11 is available under uv, `.venv` and `uv.lock` are created, and the lock check succeeds.
+Expected: Python 3.12 is available under uv, the main `.venv` and both `uv.lock` files are created, and both lock checks succeed. The OCR environment itself is synchronized on the Linux/L20 host.
 
 - [ ] **Step 5: Run package, formatting, and type checks**
 
@@ -177,8 +176,8 @@ Expected: all commands exit 0.
 - [ ] **Step 6: Commit the project scaffold**
 
 ```bash
-git add .python-version pyproject.toml uv.lock README.md src/poor_word tests/test_package.py
-git commit -m "build: initialize Python uv project"
+git add .python-version pyproject.toml uv.lock environments/ocr README.md src/poor_word tests/test_package.py
+git commit -m "feature: initialize Python uv project"
 ```
 
 ### Task 2: Define shared configuration and domain records
@@ -941,7 +940,7 @@ Expected: all checks pass; `artifacts/report-smoke/report.json` and `report.md` 
 
 - [ ] **Step 7: Update README with exact local and L20 commands**
 
-Document `uv python install 3.11`, `uv sync`, source locking/fetching, smoke generation, CPU tests, L20 OCR audit, L20 training, and evaluation. State that the current development machine has no NVIDIA runtime and that L20 commands must run on the experiment host.
+Document local `uv python install 3.12`, L20 Python 3.11 setup, `uv sync`, source locking/fetching, smoke generation, CPU tests, L20 OCR audit, L20 training, and evaluation. State that the current development machine has no NVIDIA runtime and that L20 commands must run on the experiment host.
 
 - [ ] **Step 8: Commit evaluation and MVP documentation**
 

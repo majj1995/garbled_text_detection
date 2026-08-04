@@ -13,7 +13,7 @@
 
 工程约束如下：
 
-- 语言与环境：Python 3.11，使用 `uv` 管理依赖、虚拟环境和命令。
+- 语言与环境：代码兼容 Python 3.11–3.12，使用 `uv` 管理依赖、虚拟环境和命令；本地开发使用 Python 3.12，L20 实验机使用 Python 3.11。
 - 现有 OCR：PaddleOCR 3.2 或更高版本，使用 `PP-OCRv5_server_det` 与 `PP-OCRv5_server_rec`。
 - 实验与推理硬件：单卡 NVIDIA L20 48 GB。
 - 服务形态：在线 GPU 服务，端到端 P95 目标不超过 1.2 秒，1.5 秒为硬上限。
@@ -48,10 +48,11 @@
 7. 融合字形、结构、视觉序列、常规 OCR、图像质量和白名单特征。
 8. 将字符结论聚合为文本行和图片结论，并回映射到原图坐标。
 
-运行时采用一个服务容器内的两个有界 Worker：
+运行时采用同一台 L20 上的两个隔离服务进程，通过本地 HTTP/JSON 通信：
 
-- OCR Worker 使用 Paddle Inference 运行 PP-OCRv5 server，并适配识别头以导出解码前 logits 和 Top-K。
-- Glyph Worker 运行新增的字形、结构和无词典序列模型。训练模型使用 PyTorch；稳定后优先导出 ONNX/TensorRT。
+- OCR 服务使用独立 Python 3.11/uv 环境和 Paddle Inference 运行 PP-OCRv5 server，并适配识别头以导出解码前 logits 和 Top-K。
+- Glyph 服务使用根项目环境运行新增的字形、结构和无词典序列模型。训练模型使用 PyTorch；稳定后优先导出 ONNX/TensorRT。
+- PaddlePaddle GPU 与 CUDA PyTorch 不进入同一个 uv 锁文件或 Python 进程，避免二者对 CUDA/NCCL 精确版本约束冲突。第一阶段使用回环接口；稳定后可将 Glyph 模型导出至 ONNX/TensorRT，进一步收敛在线运行时。
 
 两个 Worker 共享请求编排但隔离 CUDA 上下文和显存上限。字符裁剪使用动态批处理，合法字形原型常驻显存。
 
@@ -244,7 +245,7 @@ AIGC 采用两种方式：
 
 ## 13. 技术栈与仓库约定
 
-- 环境与打包：Python 3.11、`uv`、`pyproject.toml`、锁文件。
+- 环境与打包：根项目支持 Python 3.11–3.12，本地锁定 3.12；L20 的 PP-OCRv5 使用独立 Python 3.11 uv 项目及锁文件。
 - 训练：PyTorch、torchvision、scikit-learn。
 - OCR：PaddleOCR、PaddlePaddle、PP-OCRv5 server。
 - 图像与数据：OpenCV、Pillow、NumPy、PyArrow/Parquet。
