@@ -404,3 +404,53 @@ def test_real_data_crops_and_review_commands_emit_versioned_artifacts(
     )
     assert import_result.exit_code == 0
     assert f"gold={gold.gold_crops}" in import_result.stdout
+
+
+def test_mil_command_delegates_trusted_manifests_and_emits_outputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    help_result = runner.invoke(cli.app, ["train", "mil", "--help"])
+    assert help_result.exit_code == 0
+    assert "--feature-manifest" in help_result.stdout
+    assert "--held-out-fold" in help_result.stdout
+
+    artifacts = SimpleNamespace(
+        checkpoint=tmp_path / "model.pt",
+        metrics=tmp_path / "metrics.json",
+        attention_candidates=tmp_path / "attention-candidates.parquet",
+    )
+    captured: list[object] = []
+
+    def fake_train(config: object) -> object:
+        captured.append(config)
+        return artifacts
+
+    monkeypatch.setattr(cli, "train_mil_fold", fake_train)
+    result = runner.invoke(
+        cli.app,
+        [
+            "train",
+            "mil",
+            "--real-manifest",
+            str(tmp_path / "real.parquet"),
+            "--fold-manifest",
+            str(tmp_path / "folds.parquet"),
+            "--feature-manifest",
+            str(tmp_path / "oof.parquet"),
+            "--output-dir",
+            str(tmp_path / "mil"),
+            "--held-out-fold",
+            "2",
+            "--device",
+            "cpu",
+            "--max-steps",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert len(captured) == 1
+    assert captured[0].held_out_fold == 2
+    assert f"checkpoint={artifacts.checkpoint}" in result.stdout
+    assert f"metrics={artifacts.metrics}" in result.stdout
+    assert f"attention_candidates={artifacts.attention_candidates}" in result.stdout

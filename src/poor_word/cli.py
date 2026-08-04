@@ -29,6 +29,7 @@ from poor_word.real_data.split import assign_group_folds
 from poor_word.training.adapt_real import AdaptConfig, adapt_real_encoder
 from poor_word.training.finetune_real import RealFineTuneConfig, finetune_real_fold
 from poor_word.training.train_glyph import TrainConfig, train_glyph
+from poor_word.training.train_mil import MilTrainConfig, train_mil_fold
 
 app = typer.Typer(no_args_is_help=True)
 data_app = typer.Typer(no_args_is_help=True)
@@ -314,6 +315,43 @@ def train_real_oof_command(
     )
     typer.echo(f"oof={oof}")
     typer.echo(f"metrics={oof.parent / 'metrics.json'}")
+
+
+@train_app.command("mil")
+def train_mil_command(
+    real_manifest: Annotated[Path, typer.Option("--real-manifest")],
+    fold_manifest: Annotated[Path, typer.Option("--fold-manifest")],
+    feature_manifest: Annotated[Path, typer.Option("--feature-manifest")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    held_out_fold: Annotated[int, typer.Option("--held-out-fold", min=0)],
+    epochs: Annotated[int, typer.Option("--epochs", min=1)] = 30,
+    max_steps: Annotated[int | None, typer.Option("--max-steps", min=1)] = None,
+    batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 32,
+    patience: Annotated[int, typer.Option("--patience", min=1)] = 5,
+    min_delta: Annotated[float, typer.Option("--min-delta", min=0)] = 1e-4,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
+    device: Annotated[str, typer.Option("--device")] = "cuda",
+) -> None:
+    """Train a leakage-safe image-level MIL head from held-out character evidence."""
+    artifacts = train_mil_fold(
+        MilTrainConfig(
+            real_manifest=real_manifest,
+            fold_manifest=fold_manifest,
+            feature_manifest=feature_manifest,
+            output_dir=output_dir,
+            held_out_fold=held_out_fold,
+            epochs=epochs,
+            max_steps=max_steps,
+            batch_size=batch_size,
+            patience=patience,
+            min_delta=min_delta,
+            seed=seed,
+            device=device,
+        )
+    )
+    typer.echo(f"checkpoint={artifacts.checkpoint}")
+    typer.echo(f"metrics={artifacts.metrics}")
+    typer.echo(f"attention_candidates={artifacts.attention_candidates}")
 
 
 @evaluate_app.command("glyph")
