@@ -195,3 +195,83 @@ def test_real_data_split_command_emits_fold_audit(
     assert result.exit_code == 0
     assert f"folds={paths.folds}" in result.stdout
     assert f"audit={paths.audit}" in result.stdout
+
+
+def test_real_data_crops_and_review_commands_emit_versioned_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    crops = SimpleNamespace(
+        manifest=tmp_path / "crops.parquet", audit=tmp_path / "crops-audit.json"
+    )
+    monkeypatch.setattr(cli, "extract_character_crops", lambda *_args, **_kwargs: crops)
+    crop_result = runner.invoke(
+        cli.app,
+        [
+            "real-data",
+            "crops",
+            "--manifest",
+            str(tmp_path / "manifest.parquet"),
+            "--image-root",
+            str(tmp_path / "images"),
+            "--output-dir",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert crop_result.exit_code == 0
+    assert f"crops={crops.manifest}" in crop_result.stdout
+
+    queue = SimpleNamespace(
+        queue=tmp_path / "queue",
+        queue_version="version-1",
+        csv=tmp_path / "queue.csv",
+        jsonl=tmp_path / "queue.jsonl",
+        contact_sheet=tmp_path / "contact-sheet.png",
+    )
+    monkeypatch.setattr(cli, "build_review_queue", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(cli, "export_review_queue", lambda *_args, **_kwargs: queue)
+    scores = tmp_path / "scores.jsonl"
+    scores.write_text(
+        '{"crop_id":"a","image_id":"one","crop_path":"images/a.png","risk_score":0.5,"style_id":"x"}\n',
+        encoding="utf-8",
+    )
+    disagreements = tmp_path / "disagreements.jsonl"
+    disagreements.write_text('{"crop_id":"a","disagreement":0.1}\n', encoding="utf-8")
+    export_result = runner.invoke(
+        cli.app,
+        [
+            "review",
+            "export",
+            "--crops",
+            str(tmp_path / "crops.parquet"),
+            "--crop-root",
+            str(tmp_path / "root"),
+            "--scores",
+            str(scores),
+            "--disagreements",
+            str(disagreements),
+            "--output-dir",
+            str(tmp_path / "queues"),
+        ],
+    )
+    assert export_result.exit_code == 0
+    assert "queue_version=version-1" in export_result.stdout
+
+    gold = SimpleNamespace(
+        gold_crops=tmp_path / "gold-crops.parquet", audit=tmp_path / "audit.json"
+    )
+    monkeypatch.setattr(cli, "import_review_labels", lambda *_args, **_kwargs: gold)
+    import_result = runner.invoke(
+        cli.app,
+        [
+            "review",
+            "import",
+            "--labels",
+            str(tmp_path / "labels.jsonl"),
+            "--queue",
+            str(tmp_path / "queue"),
+            "--output-dir",
+            str(tmp_path / "gold"),
+        ],
+    )
+    assert import_result.exit_code == 0
+    assert f"gold={gold.gold_crops}" in import_result.stdout

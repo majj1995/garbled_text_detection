@@ -4,7 +4,7 @@ import platform
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import typer
@@ -17,7 +17,13 @@ from poor_word.glyphs.catalog import load_common_chars
 from poor_word.glyphs.corrupt import OPERATORS
 from poor_word.glyphs.generate import GenerationConfig, generate_dataset
 from poor_word.ocr.paddle_v5 import PaddleV5Adapter
+from poor_word.real_data.crops import extract_character_crops
 from poor_word.real_data.ingest import import_real_dataset
+from poor_word.real_data.review import (
+    build_review_queue,
+    export_review_queue,
+    import_review_labels,
+)
 from poor_word.real_data.split import assign_group_folds
 from poor_word.training.train_glyph import TrainConfig, train_glyph
 
@@ -28,12 +34,14 @@ ocr_app = typer.Typer(no_args_is_help=True)
 train_app = typer.Typer(no_args_is_help=True)
 evaluate_app = typer.Typer(no_args_is_help=True)
 real_data_app = typer.Typer(no_args_is_help=True)
+review_app = typer.Typer(no_args_is_help=True)
 app.add_typer(data_app, name="data")
 app.add_typer(glyphs_app, name="glyphs")
 app.add_typer(ocr_app, name="ocr")
 app.add_typer(train_app, name="train")
 app.add_typer(evaluate_app, name="evaluate")
 app.add_typer(real_data_app, name="real-data")
+app.add_typer(review_app, name="review")
 
 
 @app.callback()
@@ -269,4 +277,84 @@ def real_data_split_command(
         manifest, image_root, output_dir, folds=folds, seed=seed
     )
     typer.echo(f"folds={artifacts.folds}")
+    typer.echo(f"audit={artifacts.audit}")
+
+
+@real_data_app.command("crops")
+def real_data_crops_command(
+    manifest: Annotated[Path, typer.Option("--manifest")],
+    image_root: Annotated[Path, typer.Option("--image-root")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    padding: Annotated[int, typer.Option("--padding", min=0)] = 2,
+    ocr_results: Annotated[Path | None, typer.Option("--ocr-results")] = None,
+    ocr_audit: Annotated[Path | None, typer.Option("--ocr-audit")] = None,
+) -> None:
+    """Extract immutable character crops from reviewed or audited OCR boxes."""
+    artifacts = extract_character_crops(
+        manifest,
+        image_root,
+        output_dir,
+        padding=padding,
+        ocr_results=ocr_results,
+        ocr_audit=ocr_audit,
+    )
+    typer.echo(f"crops={artifacts.manifest}")
+    typer.echo(f"audit={artifacts.audit}")
+
+
+def _read_jsonl_objects(path: Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise typer.BadParameter(f"invalid JSONL at line {number}: {error}") from error
+        if not isinstance(row, dict):
+            raise typer.BadParameter(f"JSONL row must be an object at line {number}")
+        rows.append(cast(dict[str, object], row))
+    return rows
+
+
+@review_app.command("export")
+def review_export_command(
+    crops: Annotated[Path, typer.Option("--crops")],
+    crop_root: Annotated[Path, typer.Option("--crop-root")],
+    scores: Annotated[Path, typer.Option("--scores")],
+    disagreements: Annotated[Path, typer.Option("--disagreements")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    limit: Annotated[int, typer.Option("--limit", min=1)] = 500,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
+) -> None:
+    """Export a versioned CSV/JSONL quick-review queue with contact thumbnails."""
+    score_rows = _read_jsonl_objects(scores)
+    disagreement_values: dict[str, float] = {}
+    for row in _read_jsonl_objects(disagreements):
+        crop_id = row.get("crop_id")
+        value = row.get("disagreement")
+        if not isinstance(crop_id, str) or not isinstance(value, (int, float)):
+            raise typer.BadParameter("disagreement rows require crop_id and numeric disagreement")
+        if crop_id in disagreement_values:
+            raise typer.BadParameter(f"duplicate disagreement crop_id: {crop_id}")
+        disagreement_values[crop_id] = float(value)
+    queue = build_review_queue(score_rows, disagreement_values, limit, seed)
+    artifacts = export_review_queue(queue, crops, crop_root, output_dir)
+    typer.echo(f"queue={artifacts.queue}")
+    typer.echo(f"queue_version={artifacts.queue_version}")
+    typer.echo(f"csv={artifacts.csv}")
+    typer.echo(f"jsonl={artifacts.jsonl}")
+    typer.echo(f"contact_sheet={artifacts.contact_sheet}")
+
+
+@review_app.command("import")
+def review_import_command(
+    labels: Annotated[Path, typer.Option("--labels")],
+    queue: Annotated[Path, typer.Option("--queue")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    existing_gold: Annotated[Path | None, typer.Option("--existing-gold")] = None,
+) -> None:
+    """Import human labels after verifying queue version and gold-label ownership."""
+    artifacts = import_review_labels(labels, queue, output_dir, existing_gold=existing_gold)
+    typer.echo(f"gold={artifacts.gold_crops}")
     typer.echo(f"audit={artifacts.audit}")

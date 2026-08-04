@@ -193,3 +193,54 @@ uv run poor-word real-data split \
 
 输出 `folds.parquet` 和 `split-audit.json`。锁定测试统一为 `fold=-1`；若它与开发集
 存在任何分组或近重复连通关系，命令直接失败，要求先修正数据划分。
+
+## 字符裁剪与人工快审
+
+字符裁剪只使用导入清单中的人工审核 `characters` 框，或同时提供 OCR JSONL 结果和明确
+声明 `character_boxes_available=true` 的 OCR 审计。OCR JSONL 每行使用
+`{"image_id":"...","result":<OcrResult>}`；其中 `result` 遵循项目的 OCR-neutral
+schema。行级 OCR 框不会被等宽拆分或伪造为字符框。输出裁剪 PNG、`crops.parquet` 和
+`crops-audit.json` 均为不可变工件，且包含原图 SHA-256 和裁剪坐标链路。
+
+```bash
+# 仅用已有的人审字符框
+uv run poor-word real-data crops \
+  --manifest data/real/versioned/seed-v1/manifest.parquet \
+  --image-root data/real/seed \
+  --output-dir data/real/versioned/seed-v1/crops-v1 \
+  --padding 2
+
+# 如使用 OCR，结果和能力审计必须成对提供
+uv run poor-word real-data crops \
+  --manifest data/real/versioned/seed-v1/manifest.parquet \
+  --image-root data/real/seed \
+  --output-dir data/real/versioned/seed-v1/crops-ocr-v1 \
+  --ocr-results artifacts/ocr-character-results.jsonl \
+  --ocr-audit artifacts/ocr-audit-l20.json
+```
+
+快审队列的分数输入和模型分歧输入是 JSONL。分数行应含 `crop_id`、`image_id`、
+`crop_path`、`risk_score`（0–1）和 `style_id`；分歧行含 `crop_id` 与非负
+`disagreement`。队列按模型分歧、接近阈值的候选和风格覆盖度确定性排序，导出版本化的
+CSV、JSONL 与 contact sheet。人工回传 CSV 或 JSONL 时，每行必须带导出的精确
+`queue_version`、`crop_id`、`label`（仅 `PASS`、`BLOCK`、`REVIEW`）和
+`annotator_id`。
+
+```bash
+uv run poor-word review export \
+  --crops data/real/versioned/seed-v1/crops-v1/crops.parquet \
+  --crop-root data/real/versioned/seed-v1/crops-v1 \
+  --scores artifacts/real-crop-scores.jsonl \
+  --disagreements artifacts/real-crop-disagreements.jsonl \
+  --limit 500 --seed 20260804 \
+  --output-dir data/real/review-queues
+
+uv run poor-word review import \
+  --labels review-complete.jsonl \
+  --queue data/real/review-queues/queue-<queue-version> \
+  --output-dir data/real/reviewed-gold
+```
+
+`REVIEW` 保持未解决状态，绝不会写入 `gold-crops.parquet`。已接受的 `PASS`/`BLOCK`
+标签不可被其他审核者覆盖；增量导入时通过 `--existing-gold` 指向之前版本的
+`gold-crops.parquet`。所有队列和 gold 输出目录以内容哈希版本化。
