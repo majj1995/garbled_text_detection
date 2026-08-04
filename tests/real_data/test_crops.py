@@ -138,3 +138,59 @@ def test_extract_character_crops_refuses_unaudited_or_line_only_ocr_boxes(tmp_pa
             ocr_results=results_path,
             ocr_audit=audit_path,
         )
+
+
+def test_ocr_crops_carry_validated_model_and_audit_provenance(tmp_path: Path) -> None:
+    manifest, image_root = _manifest(tmp_path, characters=[])
+    audit = OcrAudit(
+        paddleocr_version="3.2.0",
+        paddlepaddle_version="3.1.1",
+        cuda_version="12.6",
+        gpu_name="NVIDIA L20",
+        detection_model_name="PP-OCRv5_server_det",
+        recognition_model_name="PP-OCRv5_server_rec",
+        character_boxes_available=True,
+        logits_available=False,
+        latency_p50_ms=1,
+        latency_p95_ms=2,
+    )
+    audit_path = tmp_path / "audit.json"
+    audit_path.write_text(audit.model_dump_json(), encoding="utf-8")
+    results_path = tmp_path / "ocr.jsonl"
+    results_path.write_text(
+        json.dumps(
+            {
+                "image_id": "one",
+                "result": {
+                    "model_name": "glyph-locator-2026-08",
+                    "lines": [
+                        {
+                            "text": "字",
+                            "confidence": 0.9,
+                            "polygon": [[0, 0], [10, 0], [10, 5], [0, 5]],
+                            "characters": [
+                                {"text": "字", "box": {"x0": 1, "y0": 1, "x1": 8, "y1": 8}}
+                            ],
+                        }
+                    ],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    artifacts = extract_character_crops(
+        manifest,
+        image_root,
+        tmp_path / "crops",
+        ocr_results=results_path,
+        ocr_audit=audit_path,
+    )
+
+    row = pq.read_table(artifacts.manifest).to_pylist()[0]
+    crop_audit = json.loads(artifacts.audit.read_text(encoding="utf-8"))
+    assert row["ocr_model_name"] == "glyph-locator-2026-08"
+    assert row["ocr_audit_sha256"] == hashlib.sha256(audit_path.read_bytes()).hexdigest()
+    assert crop_audit["ocr_audit_sha256"] == hashlib.sha256(audit_path.read_bytes()).hexdigest()
+    assert crop_audit["ocr_audit"]["recognition_model_name"] == "PP-OCRv5_server_rec"

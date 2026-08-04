@@ -235,7 +235,11 @@ def test_real_data_crops_and_review_commands_emit_versioned_artifacts(
         encoding="utf-8",
     )
     disagreements = tmp_path / "disagreements.jsonl"
-    disagreements.write_text('{"crop_id":"a","disagreement":0.1}\n', encoding="utf-8")
+    disagreements.write_text(
+        '{"crop_id":"a","disagreement":0.1,"disagreement_model_id":"ensemble-v1",'
+        '"disagreement_artifact_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}\n',
+        encoding="utf-8",
+    )
     export_result = runner.invoke(
         cli.app,
         [

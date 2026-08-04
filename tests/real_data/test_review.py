@@ -21,6 +21,8 @@ def _scores() -> list[dict[str, object]]:
             "crop_path": "images/a.png",
             "risk_score": 0.50,
             "style_id": "rare",
+            "score_model_id": "glyph-v1",
+            "score_artifact_sha256": "a" * 64,
         },
         {
             "crop_id": "b",
@@ -28,6 +30,8 @@ def _scores() -> list[dict[str, object]]:
             "crop_path": "images/b.png",
             "risk_score": 0.49,
             "style_id": "common",
+            "score_model_id": "glyph-v1",
+            "score_artifact_sha256": "a" * 64,
         },
         {
             "crop_id": "a",
@@ -35,6 +39,8 @@ def _scores() -> list[dict[str, object]]:
             "crop_path": "images/a.png",
             "risk_score": 0.10,
             "style_id": "rare",
+            "score_model_id": "glyph-v1",
+            "score_artifact_sha256": "a" * 64,
         },
     ]
 
@@ -42,7 +48,18 @@ def _scores() -> list[dict[str, object]]:
 def test_build_review_queue_deduplicates_and_prioritizes_disagreement_then_coverage() -> None:
     queue = build_review_queue(
         _scores(),
-        {"a": 0.2, "b": 0.9},
+        {
+            "a": {
+                "disagreement": 0.2,
+                "disagreement_model_id": "ensemble-v1",
+                "disagreement_artifact_sha256": "b" * 64,
+            },
+            "b": {
+                "disagreement": 0.9,
+                "disagreement_model_id": "ensemble-v1",
+                "disagreement_artifact_sha256": "b" * 64,
+            },
+        },
         limit=2,
         seed=7,
     )
@@ -50,6 +67,8 @@ def test_build_review_queue_deduplicates_and_prioritizes_disagreement_then_cover
     assert [candidate.crop_id for candidate in queue] == ["b", "a"]
     assert len({candidate.crop_id for candidate in queue}) == 2
     assert all(candidate.label is None for candidate in queue)
+    assert queue[0].score_model_id == "glyph-v1"
+    assert queue[0].disagreement_model_id == "ensemble-v1"
 
 
 def _crop_manifest(tmp_path: Path) -> Path:
@@ -82,7 +101,23 @@ def test_review_import_requires_queue_version_rejects_duplicates_and_preserves_g
     tmp_path: Path,
 ) -> None:
     crop_manifest = _crop_manifest(tmp_path)
-    queue = build_review_queue(_scores()[:2], {"a": 0.2, "b": 0.9}, limit=2, seed=7)
+    queue = build_review_queue(
+        _scores()[:2],
+        {
+            "a": {
+                "disagreement": 0.2,
+                "disagreement_model_id": "ensemble-v1",
+                "disagreement_artifact_sha256": "b" * 64,
+            },
+            "b": {
+                "disagreement": 0.9,
+                "disagreement_model_id": "ensemble-v1",
+                "disagreement_artifact_sha256": "b" * 64,
+            },
+        },
+        limit=2,
+        seed=7,
+    )
     exported = export_review_queue(
         queue, crop_manifest, tmp_path / "crop-images", tmp_path / "queues"
     )
@@ -104,6 +139,11 @@ def test_review_import_requires_queue_version_rejects_duplicates_and_preserves_g
     row = pq.read_table(first.gold_crops).to_pylist()[0]
     assert row["decision"] == "PASS"
     assert row["queue_version"] == exported.queue_version
+    assert row["score_model_id"] == "glyph-v1"
+    assert row["disagreement_model_id"] == "ensemble-v1"
+    first_audit = json.loads(first.audit.read_text(encoding="utf-8"))
+    assert first_audit["accepted_label_count"] == 1
+    assert first_audit["review_count"] == 0
 
     labels.write_text(
         json.dumps(
@@ -162,7 +202,18 @@ def test_review_import_requires_queue_version_rejects_duplicates_and_preserves_g
 
 def test_review_import_keeps_review_out_of_gold_rows(tmp_path: Path) -> None:
     crop_manifest = _crop_manifest(tmp_path)
-    queue = build_review_queue(_scores()[:1], {"a": 0.2}, limit=1, seed=7)
+    queue = build_review_queue(
+        _scores()[:1],
+        {
+            "a": {
+                "disagreement": 0.2,
+                "disagreement_model_id": "ensemble-v1",
+                "disagreement_artifact_sha256": "b" * 64,
+            }
+        },
+        limit=1,
+        seed=7,
+    )
     exported = export_review_queue(
         queue, crop_manifest, tmp_path / "crop-images", tmp_path / "queues"
     )
@@ -182,3 +233,55 @@ def test_review_import_keeps_review_out_of_gold_rows(tmp_path: Path) -> None:
 
     imported = import_review_labels(labels, exported.queue, tmp_path / "gold")
     assert pq.read_table(imported.gold_crops).num_rows == 0
+    audit = json.loads(imported.audit.read_text(encoding="utf-8"))
+    assert audit["accepted_label_count"] == 0
+    assert audit["review_count"] == 1
+
+
+def test_export_preserves_priority_order_and_import_rejects_tampered_queue_content(
+    tmp_path: Path,
+) -> None:
+    crop_manifest = _crop_manifest(tmp_path)
+    queue = build_review_queue(
+        _scores()[:2],
+        {
+            "a": {
+                "disagreement": 0.2,
+                "disagreement_model_id": "ensemble-v1",
+                "disagreement_artifact_sha256": "b" * 64,
+            },
+            "b": {
+                "disagreement": 0.9,
+                "disagreement_model_id": "ensemble-v1",
+                "disagreement_artifact_sha256": "b" * 64,
+            },
+        },
+        limit=2,
+        seed=7,
+    )
+    exported = export_review_queue(
+        queue, crop_manifest, tmp_path / "crop-images", tmp_path / "queues"
+    )
+    rows = [json.loads(line) for line in exported.jsonl.read_text(encoding="utf-8").splitlines()]
+    assert [row["crop_id"] for row in rows] == ["b", "a"]
+    assert [row["priority_rank"] for row in rows] == [1, 2]
+
+    rows[0]["risk_score"] = 0.01
+    exported.jsonl.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8"
+    )
+    labels = tmp_path / "labels.jsonl"
+    labels.write_text(
+        json.dumps(
+            {
+                "queue_version": exported.queue_version,
+                "crop_id": "b",
+                "label": "PASS",
+                "annotator_id": "alice",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="content hash"):
+        import_review_labels(labels, exported.queue, tmp_path / "gold")

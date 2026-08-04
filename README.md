@@ -220,9 +220,11 @@ uv run poor-word real-data crops \
 ```
 
 快审队列的分数输入和模型分歧输入是 JSONL。分数行应含 `crop_id`、`image_id`、
-`crop_path`、`risk_score`（0–1）和 `style_id`；分歧行含 `crop_id` 与非负
-`disagreement`。队列按模型分歧、接近阈值的候选和风格覆盖度确定性排序，导出版本化的
-CSV、JSONL 与 contact sheet。人工回传 CSV 或 JSONL 时，每行必须带导出的精确
+`crop_path`、`risk_score`（0–1）、`style_id`、`score_model_id` 和
+`score_artifact_sha256`；分歧行应含 `crop_id`、非负 `disagreement`、
+`disagreement_model_id` 和 `disagreement_artifact_sha256`。队列按模型分歧、接近阈值的
+候选和风格覆盖度确定性排序，并保留 `priority_rank`，导出版本化的 CSV、JSONL 与
+contact sheet。人工回传 CSV 或 JSONL 时，每行必须带导出的精确
 `queue_version`、`crop_id`、`label`（仅 `PASS`、`BLOCK`、`REVIEW`）和
 `annotator_id`。
 

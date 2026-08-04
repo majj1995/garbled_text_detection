@@ -329,15 +329,31 @@ def review_export_command(
 ) -> None:
     """Export a versioned CSV/JSONL quick-review queue with contact thumbnails."""
     score_rows = _read_jsonl_objects(scores)
-    disagreement_values: dict[str, float] = {}
+    disagreement_values: dict[str, dict[str, object]] = {}
     for row in _read_jsonl_objects(disagreements):
         crop_id = row.get("crop_id")
         value = row.get("disagreement")
-        if not isinstance(crop_id, str) or not isinstance(value, (int, float)):
-            raise typer.BadParameter("disagreement rows require crop_id and numeric disagreement")
+        model_id = row.get("disagreement_model_id")
+        artifact_sha256 = row.get("disagreement_artifact_sha256")
+        if (
+            not isinstance(crop_id, str)
+            or not isinstance(value, (int, float))
+            or not isinstance(model_id, str)
+            or not model_id
+            or not isinstance(artifact_sha256, str)
+            or not artifact_sha256
+        ):
+            raise typer.BadParameter(
+                "disagreement rows require crop_id, numeric disagreement, model ID, "
+                "and artifact SHA-256"
+            )
         if crop_id in disagreement_values:
             raise typer.BadParameter(f"duplicate disagreement crop_id: {crop_id}")
-        disagreement_values[crop_id] = float(value)
+        disagreement_values[crop_id] = {
+            "disagreement": float(value),
+            "disagreement_model_id": model_id,
+            "disagreement_artifact_sha256": artifact_sha256,
+        }
     queue = build_review_queue(score_rows, disagreement_values, limit, seed)
     artifacts = export_review_queue(queue, crops, crop_root, output_dir)
     typer.echo(f"queue={artifacts.queue}")

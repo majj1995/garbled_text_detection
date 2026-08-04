@@ -26,6 +26,10 @@ class ReviewCandidate:
     risk_score: float
     style_id: str
     disagreement: float
+    score_model_id: str
+    score_artifact_sha256: str
+    disagreement_model_id: str
+    disagreement_artifact_sha256: str
     label: None = None
 
 
@@ -76,9 +80,16 @@ def _required_text(raw: Mapping[str, object], field: str) -> str:
     return value
 
 
+def _required_sha256(raw: Mapping[str, object], field: str) -> str:
+    value = _required_text(raw, field)
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError(f"review score requires lowercase SHA-256 {field}")
+    return value
+
+
 def build_review_queue(
     scores: Sequence[Mapping[str, object]],
-    disagreements: Mapping[str, float],
+    disagreements: Mapping[str, Mapping[str, object]],
     limit: int,
     seed: int,
 ) -> tuple[ReviewCandidate, ...]:
@@ -91,7 +102,10 @@ def build_review_queue(
         risk_score_raw = raw.get("risk_score")
         if not isinstance(risk_score_raw, (int, float)) or not 0 <= risk_score_raw <= 1:
             raise ValueError(f"review score has invalid risk_score for crop_id={crop_id}")
-        disagreement = disagreements.get(crop_id, 0.0)
+        disagreement_raw = disagreements.get(crop_id)
+        if disagreement_raw is None:
+            raise ValueError(f"review score is missing disagreement for crop_id={crop_id}")
+        disagreement = disagreement_raw.get("disagreement")
         if not isinstance(disagreement, (int, float)) or disagreement < 0:
             raise ValueError(f"review score has invalid disagreement for crop_id={crop_id}")
         candidate = ReviewCandidate(
@@ -101,12 +115,22 @@ def build_review_queue(
             risk_score=float(risk_score_raw),
             style_id=_required_text(raw, "style_id"),
             disagreement=float(disagreement),
+            score_model_id=_required_text(raw, "score_model_id"),
+            score_artifact_sha256=_required_sha256(raw, "score_artifact_sha256"),
+            disagreement_model_id=_required_text(disagreement_raw, "disagreement_model_id"),
+            disagreement_artifact_sha256=_required_sha256(
+                disagreement_raw, "disagreement_artifact_sha256"
+            ),
         )
         previous = candidates.get(crop_id)
         if previous is not None and (
             previous.image_id != candidate.image_id
             or previous.crop_path != candidate.crop_path
             or previous.style_id != candidate.style_id
+            or previous.score_model_id != candidate.score_model_id
+            or previous.score_artifact_sha256 != candidate.score_artifact_sha256
+            or previous.disagreement_model_id != candidate.disagreement_model_id
+            or previous.disagreement_artifact_sha256 != candidate.disagreement_artifact_sha256
         ):
             raise ValueError(f"duplicate crop_id has inconsistent metadata: {crop_id}")
         if previous is None or (candidate.disagreement, candidate.risk_score) > (
@@ -165,16 +189,23 @@ def _safe_crop_path(root: Path, relative: str) -> Path:
 def _csv_bytes(rows: list[dict[str, object]]) -> bytes:
     fields = [
         "queue_version",
+        "priority_rank",
         "crop_id",
         "image_id",
         "crop_path",
         "risk_score",
         "style_id",
         "disagreement",
+        "score_model_id",
+        "score_artifact_sha256",
+        "disagreement_model_id",
+        "disagreement_artifact_sha256",
         "label",
         "annotator_id",
         "source_image_sha256",
         "crop_sha256",
+        "ocr_model_name",
+        "ocr_audit_sha256",
     ]
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\n")
@@ -206,6 +237,17 @@ def _contact_sheet(rows: list[dict[str, object]], crop_root: Path) -> bytes:
     return output.getvalue()
 
 
+def _queue_version(crop_manifest_sha256: str, candidates: list[dict[str, object]]) -> str:
+    return hashlib.sha256(
+        _canonical_json(
+            {
+                "crop_manifest_sha256": crop_manifest_sha256,
+                "candidates": candidates,
+            }
+        )
+    ).hexdigest()
+
+
 def export_review_queue(
     queue: Sequence[ReviewCandidate],
     crop_manifest: Path,
@@ -217,7 +259,7 @@ def export_review_queue(
         raise ValueError("cannot export an empty review queue")
     crop_rows = _load_crop_rows(crop_manifest)
     records: list[dict[str, object]] = []
-    for candidate in queue:
+    for priority_rank, candidate in enumerate(queue, start=1):
         source = crop_rows.get(candidate.crop_id)
         if source is None:
             raise ValueError(f"review candidate is absent from crop manifest: {candidate.crop_id}")
@@ -229,16 +271,15 @@ def export_review_queue(
         records.append(
             {
                 **asdict(candidate),
+                "priority_rank": priority_rank,
                 "source_image_sha256": str(source.get("source_image_sha256", "")),
                 "crop_sha256": str(source.get("crop_sha256", "")),
+                "ocr_model_name": str(source.get("ocr_model_name", "")),
+                "ocr_audit_sha256": str(source.get("ocr_audit_sha256", "")),
             }
         )
-    records.sort(key=lambda record: str(record["crop_id"]))
-    version_payload = {
-        "crop_manifest_sha256": _sha256(crop_manifest),
-        "candidates": records,
-    }
-    queue_version = hashlib.sha256(_canonical_json(version_payload)).hexdigest()
+    crop_manifest_sha256 = _sha256(crop_manifest)
+    queue_version = _queue_version(crop_manifest_sha256, records)
     for record in records:
         record["queue_version"] = queue_version
     queue_dir = output_dir / f"queue-{queue_version}"
@@ -257,7 +298,7 @@ def export_review_queue(
         _canonical_json(
             {
                 "candidate_count": len(records),
-                "crop_manifest_sha256": _sha256(crop_manifest),
+                "crop_manifest_sha256": crop_manifest_sha256,
                 "queue_version": queue_version,
             }
         )
@@ -276,16 +317,25 @@ def _load_queue(queue_dir: Path) -> tuple[str, dict[str, dict[str, object]]]:
     try:
         metadata = json.loads((queue_dir / "queue.json").read_text(encoding="utf-8"))
         version = metadata["queue_version"]
-    except (KeyError, ValueError, json.JSONDecodeError) as error:
+        crop_manifest_sha256 = metadata["crop_manifest_sha256"]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError(f"invalid review queue metadata: {error}") from error
-    if not isinstance(version, str) or not version:
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(version, str)
+        or not version
+        or not isinstance(crop_manifest_sha256, str)
+    ):
         raise ValueError("invalid review queue version")
     records: dict[str, dict[str, object]] = {}
+    version_candidates: list[dict[str, object]] = []
     for number, line in enumerate(
         (queue_dir / "queue.jsonl").read_text(encoding="utf-8").splitlines(), 1
     ):
         try:
             row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError("row must be an object")
             crop_id = row["crop_id"]
         except (KeyError, json.JSONDecodeError) as error:
             raise ValueError(f"invalid review queue row at line {number}: {error}") from error
@@ -293,9 +343,18 @@ def _load_queue(queue_dir: Path) -> tuple[str, dict[str, dict[str, object]]]:
             not isinstance(crop_id, str)
             or crop_id in records
             or row.get("queue_version") != version
+            or row.get("priority_rank") != number
         ):
             raise ValueError(f"invalid review queue row at line {number}")
-        records[crop_id] = cast(dict[str, object], row)
+        record = cast(dict[str, object], row)
+        records[crop_id] = record
+        version_candidates.append(
+            {key: value for key, value in record.items() if key != "queue_version"}
+        )
+    if metadata.get("candidate_count") != len(version_candidates):
+        raise ValueError("review queue candidate count does not match metadata")
+    if _queue_version(crop_manifest_sha256, version_candidates) != version:
+        raise ValueError("review queue content hash does not match exported queue version")
     return version, records
 
 
@@ -346,6 +405,13 @@ _GOLD_SCHEMA = pa.schema(
         ("crop_sha256", pa.string()),
         ("risk_score", pa.float64()),
         ("style_id", pa.string()),
+        ("priority_rank", pa.int64()),
+        ("score_model_id", pa.string()),
+        ("score_artifact_sha256", pa.string()),
+        ("disagreement_model_id", pa.string()),
+        ("disagreement_artifact_sha256", pa.string()),
+        ("ocr_model_name", pa.string()),
+        ("ocr_audit_sha256", pa.string()),
     ]
 )
 
@@ -381,6 +447,12 @@ def import_review_labels(
             raise ValueError(f"invalid review label for crop_id={crop_id}") from error
         pending.append((crop_id, annotator_id, decision))
 
+    accepted_label_count = sum(
+        decision in {Decision.PASS, Decision.BLOCK} for _, _, decision in pending
+    )
+    review_count = sum(decision is Decision.REVIEW for _, _, decision in pending)
+    new_gold_count = 0
+
     for crop_id, annotator_id, decision in pending:
         if decision is Decision.REVIEW:
             continue
@@ -394,8 +466,11 @@ def import_review_labels(
             continue
         source = queue_rows[crop_id]
         risk_score = source.get("risk_score")
+        priority_rank = source.get("priority_rank")
         if not isinstance(risk_score, (int, float)):
             raise ValueError(f"invalid queued risk score for crop_id={crop_id}")
+        if not isinstance(priority_rank, int):
+            raise ValueError(f"invalid queued priority rank for crop_id={crop_id}")
         gold[crop_id] = {
             "crop_id": crop_id,
             "image_id": str(source["image_id"]),
@@ -408,7 +483,15 @@ def import_review_labels(
             "crop_sha256": str(source.get("crop_sha256", "")),
             "risk_score": float(risk_score),
             "style_id": str(source["style_id"]),
+            "priority_rank": priority_rank,
+            "score_model_id": str(source["score_model_id"]),
+            "score_artifact_sha256": str(source["score_artifact_sha256"]),
+            "disagreement_model_id": str(source["disagreement_model_id"]),
+            "disagreement_artifact_sha256": str(source["disagreement_artifact_sha256"]),
+            "ocr_model_name": str(source.get("ocr_model_name", "")),
+            "ocr_audit_sha256": str(source.get("ocr_audit_sha256", "")),
         }
+        new_gold_count += 1
 
     output_rows = [gold[crop_id] for crop_id in sorted(gold)]
     sink = pa.BufferOutputStream()
@@ -429,10 +512,11 @@ def import_review_labels(
         _canonical_json(
             {
                 "accepted_gold_count": len(output_rows),
+                "accepted_label_count": accepted_label_count,
                 "labels_sha256": _sha256(labels),
+                "new_gold_count": new_gold_count,
                 "queue_version": queue_version,
-                "review_count": len(seen)
-                - sum(1 for row in output_rows if row["queue_version"] == queue_version),
+                "review_count": review_count,
             }
         )
         + b"\n",
