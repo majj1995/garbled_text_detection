@@ -17,7 +17,11 @@ from sklearn.metrics import average_precision_score  # type: ignore[import-untyp
 
 from poor_word.domain import Decision
 from poor_word.real_data.schema import SplitRole
-from poor_word.training.finetune_real import FoldModelArtifacts
+from poor_word.training.finetune_real import (
+    FoldModelArtifacts,
+    RealFineTuneConfig,
+    _validated_inputs,
+)
 
 
 def _sha256(path: Path) -> str:
@@ -83,6 +87,11 @@ def _fold_metrics(rows: list[dict[str, Any]], fold: int) -> dict[str, object]:
 def collect_oof_scores(
     fold_artifacts: list[FoldModelArtifacts] | tuple[FoldModelArtifacts, ...],
     fold_manifest: Path,
+    real_manifest: Path,
+    crop_manifest: Path,
+    gold_manifest: Path,
+    adapted_checkpoint: Path,
+    synthetic_manifest: Path,
     output_dir: Path | None = None,
 ) -> Path:
     """Validate fold provenance and atomically publish one score per held-out crop."""
@@ -92,7 +101,20 @@ def collect_oof_scores(
     if destination.exists():
         raise ValueError(f"OOF output directory already exists: {destination}")
     manifest_hash = _sha256(fold_manifest)
-    fold_rows = cast(list[dict[str, Any]], pq.read_table(fold_manifest).to_pylist())
+    trusted_hashes = {
+        "parent_checkpoint_sha256": _sha256(adapted_checkpoint),
+        "real_manifest_sha256": _sha256(real_manifest),
+        "crop_manifest_sha256": _sha256(crop_manifest),
+        "gold_manifest_sha256": _sha256(gold_manifest),
+        "fold_manifest_sha256": manifest_hash,
+        "synthetic_manifest_sha256": _sha256(synthetic_manifest),
+    }
+    fold_rows = cast(
+        list[dict[str, Any]],
+        pq.read_table(
+            fold_manifest, columns=["image_id", "fold", "split_role"]
+        ).to_pylist(),
+    )
     assignments: dict[str, tuple[int, str]] = {}
     valid_roles = {role.value for role in SplitRole}
     for row in fold_rows:
@@ -106,6 +128,23 @@ def collect_oof_scores(
         if not isinstance(role, str) or role not in valid_roles:
             raise ValueError("fold manifest has malformed split_role")
         assignments[image_id] = (fold, role)
+
+    development_folds = {
+        fold for fold, role in assignments.values() if fold >= 0 and role != SplitRole.LOCKED_TEST
+    }
+    contract_config = RealFineTuneConfig(
+        real_manifest=real_manifest,
+        crop_manifest=crop_manifest,
+        gold_manifest=gold_manifest,
+        fold_manifest=fold_manifest,
+        synthetic_manifest=synthetic_manifest,
+        adapted_checkpoint=adapted_checkpoint,
+        output_dir=destination / "unused",
+        device="cpu",
+    )
+    trusted_contracts = {
+        fold: _validated_inputs(contract_config, fold) for fold in development_folds
+    }
 
     rows: list[dict[str, Any]] = []
     seen_folds: set[int] = set()
@@ -124,15 +163,33 @@ def collect_oof_scores(
         checkpoint = cast(dict[str, object], checkpoint_raw)
         if checkpoint.get("held_out_fold") != fold:
             raise ValueError(f"fold {fold} checkpoint held-out fold mismatch")
-        if checkpoint.get("fold_manifest_sha256") != manifest_hash:
-            raise ValueError(f"fold {fold} checkpoint fold manifest hash mismatch")
+        for field, expected_hash in trusted_hashes.items():
+            if checkpoint.get(field) != expected_hash:
+                raise ValueError(f"fold {fold} checkpoint {field} mismatch")
+        contract = trusted_contracts.get(fold)
+        if contract is None:
+            raise ValueError(f"fold {fold} has no trusted development contract")
+        expected_rows = {item.crop_id: item for item in contract.scoring}
+        expected_ids = tuple(sorted(expected_rows))
+        expected_training_ids = tuple(sorted(item.crop_id for item in contract.training))
         checkpoint_scoring = checkpoint.get("scoring_crop_ids")
         if not isinstance(checkpoint_scoring, list) or not all(
             isinstance(crop_id, str) and crop_id for crop_id in checkpoint_scoring
         ):
             raise ValueError(f"fold {fold} checkpoint scoring IDs are malformed")
-        if tuple(checkpoint_scoring) != artifact.scoring_crop_ids:
-            raise ValueError(f"fold {fold} artifact/checkpoint scoring IDs mismatch")
+        checkpoint_training = checkpoint.get("real_training_crop_ids")
+        if not isinstance(checkpoint_training, list) or not all(
+            isinstance(crop_id, str) and crop_id for crop_id in checkpoint_training
+        ):
+            raise ValueError(f"fold {fold} checkpoint training IDs are malformed")
+        if tuple(checkpoint_scoring) != expected_ids:
+            raise ValueError(f"fold {fold} checkpoint scoring IDs mismatch trusted gold")
+        if tuple(checkpoint_training) != expected_training_ids:
+            raise ValueError(f"fold {fold} checkpoint training IDs mismatch trusted gold")
+        if set(checkpoint_scoring) & set(checkpoint_training):
+            raise ValueError(f"fold {fold} checkpoint training/scoring IDs overlap")
+        if artifact.scoring_crop_ids != expected_ids:
+            raise ValueError(f"fold {fold} artifact scoring IDs mismatch trusted gold")
         artifact_rows = cast(list[dict[str, Any]], pq.read_table(artifact.scores).to_pylist())
         actual_ids: set[str] = set()
         for row in artifact_rows:
@@ -153,8 +210,24 @@ def collect_oof_scores(
                 raise ValueError(f"locked-test row mixed into OOF scores: {crop_id}")
             if row_fold != fold or assigned_fold != fold:
                 raise ValueError(f"OOF score/model/fold mismatch: {crop_id}")
-            if row.get("fold_manifest_sha256") != manifest_hash:
-                raise ValueError(f"OOF fold manifest hash mismatch: {crop_id}")
+            expected = expected_rows.get(crop_id)
+            if expected is None:
+                raise ValueError(f"OOF score is absent from trusted held-out gold: {crop_id}")
+            if image_id != expected.image_id:
+                raise ValueError(f"OOF score image_id mismatch trusted gold: {crop_id}")
+            if decision != expected.decision:
+                raise ValueError(f"OOF score decision mismatch trusted gold: {crop_id}")
+            if anomaly_kind != expected.anomaly_kind:
+                raise ValueError(f"OOF score anomaly_kind mismatch trusted gold: {crop_id}")
+            if row.get("model_id") != f"real-fold-{fold}":
+                raise ValueError(f"OOF score model_id mismatch: {crop_id}")
+            for field in (
+                "parent_checkpoint_sha256",
+                "gold_manifest_sha256",
+                "fold_manifest_sha256",
+            ):
+                if row.get(field) != trusted_hashes[field]:
+                    raise ValueError(f"OOF score {field} mismatch: {crop_id}")
             if row.get("checkpoint_sha256") != checkpoint_hash:
                 raise ValueError(f"OOF checkpoint hash mismatch: {crop_id}")
             if decision not in {item.value for item in Decision}:
@@ -170,14 +243,10 @@ def collect_oof_scores(
                 raise ValueError(f"OOF score has malformed risk_score: {crop_id}")
             actual_ids.add(crop_id)
             rows.append(row)
-        expected_ids = set(artifact.scoring_crop_ids)
-        if len(expected_ids) != len(artifact.scoring_crop_ids) or actual_ids != expected_ids:
+        if actual_ids != set(expected_ids):
             raise ValueError(f"fold {fold} has missing or unexpected OOF crop scores")
         seen_crops.update(actual_ids)
 
-    development_folds = {
-        fold for fold, role in assignments.values() if fold >= 0 and role != SplitRole.LOCKED_TEST
-    }
     if seen_folds != development_folds:
         raise ValueError("OOF fold artifacts do not cover every development fold")
 

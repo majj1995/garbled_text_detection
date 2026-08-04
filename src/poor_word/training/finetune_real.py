@@ -87,14 +87,30 @@ def _required_text(row: dict[str, Any], field: str, manifest: str) -> str:
     return value
 
 
-def _load_unique(path: Path, key: str, manifest: str) -> dict[str, dict[str, Any]]:
-    rows = cast(list[dict[str, Any]], pq.read_table(path).to_pylist())
+def _load_unique(
+    path: Path,
+    key: str,
+    manifest: str,
+    *,
+    columns: list[str],
+    allowed_ids: set[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    filters = [(key, "in", sorted(allowed_ids))] if allowed_ids is not None else None
+    rows = cast(
+        list[dict[str, Any]],
+        pq.read_table(path, columns=columns, filters=filters).to_pylist(),
+    )
     result: dict[str, dict[str, Any]] = {}
     for row in rows:
         value = _required_text(row, key, manifest)
         if value in result:
             raise ValueError(f"{manifest} has duplicate {key}: {value}")
+        if allowed_ids is not None and value not in allowed_ids:
+            raise ValueError(f"{manifest} filter returned disallowed {key}: {value}")
         result[value] = row
+    if allowed_ids is not None and set(result) != allowed_ids:
+        missing = sorted(allowed_ids - set(result))
+        raise ValueError(f"{manifest} filtered read is missing IDs: {missing}")
     return result
 
 
@@ -111,7 +127,12 @@ def _validated_inputs(config: RealFineTuneConfig, held_out_fold: int) -> _Valida
     if held_out_fold < 0:
         raise ValueError("held_out_fold must be a development fold")
     valid_roles = {role.value for role in SplitRole}
-    real = _load_unique(config.real_manifest, "image_id", "real manifest")
+    real = _load_unique(
+        config.real_manifest,
+        "image_id",
+        "real manifest",
+        columns=["image_id", "split_role", "training_eligible"],
+    )
     for row in real.values():
         role = row.get("split_role")
         eligible = row.get("training_eligible")
@@ -120,7 +141,12 @@ def _validated_inputs(config: RealFineTuneConfig, held_out_fold: int) -> _Valida
         if not isinstance(eligible, bool):
             raise ValueError("real manifest has malformed training_eligible")
 
-    folds = _load_unique(config.fold_manifest, "image_id", "fold manifest")
+    folds = _load_unique(
+        config.fold_manifest,
+        "image_id",
+        "fold manifest",
+        columns=["image_id", "fold", "split_role"],
+    )
     if set(folds) != set(real):
         raise ValueError("fold manifest image IDs do not exactly match real manifest")
     for image_id, row in folds.items():
@@ -137,14 +163,55 @@ def _validated_inputs(config: RealFineTuneConfig, held_out_fold: int) -> _Valida
         if role != SplitRole.LOCKED_TEST.value and fold < 0:
             raise ValueError(f"development image has invalid negative fold: {image_id}")
 
-    crops = _load_unique(config.crop_manifest, "crop_id", "crop manifest")
-    for crop_id, row in crops.items():
+    crop_links = _load_unique(
+        config.crop_manifest,
+        "crop_id",
+        "crop manifest",
+        columns=["crop_id", "image_id"],
+    )
+    for crop_id, row in crop_links.items():
         image_id = _required_text(row, "image_id", "crop manifest")
-        _required_text(row, "crop_path", "crop manifest")
         if image_id not in real:
             raise ValueError(f"crop image_id is missing from real manifest: {crop_id}")
 
-    gold = _load_unique(config.gold_manifest, "crop_id", "gold manifest")
+    gold_links = _load_unique(
+        config.gold_manifest,
+        "crop_id",
+        "gold manifest",
+        columns=["crop_id", "image_id"],
+    )
+    allowed_ids: set[str] = set()
+    for crop_id, row in gold_links.items():
+        source = crop_links.get(crop_id)
+        if source is None:
+            raise ValueError(f"gold crop is missing from crop manifest: {crop_id}")
+        image_id = _required_text(row, "image_id", "gold manifest")
+        if image_id != _required_text(source, "image_id", "crop manifest"):
+            raise ValueError(f"gold/crop image_id mismatch for crop_id={crop_id}")
+        fold = cast(int, folds[image_id]["fold"])
+        role = cast(str, folds[image_id]["split_role"])
+        if fold >= 0 and role == SplitRole.DEV.value:
+            allowed_ids.add(crop_id)
+
+    if not allowed_ids:
+        raise ValueError("no reviewed development crops are available")
+    crops = _load_unique(
+        config.crop_manifest,
+        "crop_id",
+        "crop manifest",
+        columns=["crop_id", "image_id", "crop_path"],
+        allowed_ids=allowed_ids,
+    )
+    gold_columns = ["crop_id", "image_id", "crop_path", "decision"]
+    if "anomaly_kind" in pq.ParquetFile(config.gold_manifest).schema_arrow.names:
+        gold_columns.append("anomaly_kind")
+    gold = _load_unique(
+        config.gold_manifest,
+        "crop_id",
+        "gold manifest",
+        columns=gold_columns,
+        allowed_ids=allowed_ids,
+    )
     training: list[_RealCrop] = []
     scoring: list[_RealCrop] = []
     review_excluded_count = 0
@@ -159,9 +226,6 @@ def _validated_inputs(config: RealFineTuneConfig, held_out_fold: int) -> _Valida
             raise ValueError(f"gold/crop image_id mismatch for crop_id={crop_id}")
         fold = cast(int, folds[image_id]["fold"])
         role = cast(str, folds[image_id]["split_role"])
-        # Critical isolation boundary: do not inspect label/path fields for locked rows.
-        if fold == -1 or role == SplitRole.LOCKED_TEST.value:
-            continue
         gold_path = _required_text(row, "crop_path", "gold manifest")
         source_path = _required_text(source, "crop_path", "crop manifest")
         if gold_path != source_path:
@@ -210,10 +274,24 @@ def _load_real_image(item: _RealCrop) -> Tensor:
 def _restore_model(
     path: Path, config: RealFineTuneConfig
 ) -> tuple[GlyphClassifier, dict[str, int], int]:
-    raw = torch.load(path, map_location="cpu", weights_only=False)
+    raw = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(raw, dict):
         raise ValueError("adapted checkpoint must be a mapping")
     checkpoint = cast(dict[str, object], raw)
+    expected_real_hash = _sha256(config.real_manifest)
+    expected_crop_hash = _sha256(config.crop_manifest)
+    real_hash = checkpoint.get("real_manifest_sha256")
+    crop_hash = checkpoint.get("crop_manifest_sha256")
+    if not isinstance(real_hash, str):
+        raise ValueError("adapted checkpoint is missing real_manifest_sha256")
+    if real_hash != expected_real_hash:
+        raise ValueError("adapted checkpoint real manifest hash mismatch")
+    if not isinstance(crop_hash, str):
+        raise ValueError("adapted checkpoint is missing crop_manifest_sha256")
+    if crop_hash != expected_crop_hash:
+        raise ValueError("adapted checkpoint crop manifest hash mismatch")
+    if checkpoint.get("calibrated_for_block_decisions") is not False:
+        raise ValueError("adapted checkpoint calibrated flag must be exactly false")
     model_config = checkpoint.get("config")
     catalog = checkpoint.get("char_to_id")
     state = checkpoint.get("model_state")
@@ -229,10 +307,14 @@ def _restore_model(
     if config.embedding_dim is not None and config.embedding_dim != embedding_dim:
         raise ValueError("configured embedding_dim does not match adapted checkpoint")
     if not catalog or not all(
-        isinstance(character, str) and isinstance(index, int)
+        isinstance(character, str)
+        and character
+        and type(index) is int
         for character, index in catalog.items()
     ):
         raise ValueError("adapted checkpoint has invalid character catalog")
+    if sorted(catalog.values()) != list(range(len(catalog))):
+        raise ValueError("adapted checkpoint catalog indices must be unique and contiguous")
     typed_catalog = cast(dict[str, int], catalog)
     model = GlyphClassifier(
         len(typed_catalog),
@@ -477,7 +559,7 @@ def finetune_real_fold(
                     "steps": step,
                     "loss_history": history,
                     "real_supervised_count": len(inputs.training),
-                    "real_review_excluded_count": inputs.review_excluded_count,
+                    "real_training_review_excluded_count": inputs.review_excluded_count,
                     "synthetic_replay_count": len(synthetic),
                     "scoring_count": len(inputs.scoring),
                     "checkpoint_sha256": checkpoint_hash,

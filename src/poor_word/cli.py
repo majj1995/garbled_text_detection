@@ -302,7 +302,16 @@ def train_real_oof_command(
                 held_out_fold,
             )
         )
-    oof = collect_oof_scores(artifacts, fold_manifest, output_dir / "oof")
+    oof = collect_oof_scores(
+        artifacts,
+        fold_manifest,
+        real_manifest,
+        crop_manifest,
+        gold_manifest,
+        adapted_checkpoint,
+        synthetic_manifest,
+        output_dir / "oof",
+    )
     typer.echo(f"oof={oof}")
     typer.echo(f"metrics={oof.parent / 'metrics.json'}")
 

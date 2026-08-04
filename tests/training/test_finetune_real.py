@@ -8,6 +8,7 @@ import pytest
 import torch
 from PIL import Image
 
+import poor_word.training.finetune_real as finetune_module
 from poor_word.training.finetune_real import RealFineTuneConfig, finetune_real_fold
 from poor_word.training.train_glyph import GlyphClassifier, TrainConfig
 
@@ -160,6 +161,8 @@ def _inputs(tmp_path: Path) -> RealFineTuneConfig:
             "char_to_id": {"A": 0},
             "config": {"embedding_dim": 8},
             "calibrated_for_block_decisions": False,
+            "real_manifest_sha256": _sha256(real),
+            "crop_manifest_sha256": _sha256(crops),
         },
         prior,
     )
@@ -199,8 +202,68 @@ def test_finetune_excludes_held_out_and_review_labels_and_never_opens_locked_cro
     assert all(0.0 <= row["risk_score"] <= 1.0 for row in scores)
     metrics = json.loads(artifacts.metrics.read_text(encoding="utf-8"))
     assert metrics["real_supervised_count"] == 1
-    assert metrics["real_review_excluded_count"] == 1
+    assert metrics["real_training_review_excluded_count"] == 1
     assert metrics["synthetic_replay_count"] == 2
+
+
+def test_finetune_projects_sensitive_columns_only_after_locked_row_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _inputs(tmp_path)
+    original = pq.read_table
+
+    def guarded_read_table(path: Path, *args: object, **kwargs: object) -> pa.Table:
+        table = original(path, *args, **kwargs)
+        columns = kwargs.get("columns")
+        requested = set(columns) if isinstance(columns, list) else set(table.column_names)
+        sensitive = (
+            {"crop_path"}
+            if Path(path) == config.crop_manifest
+            else {"crop_path", "decision", "anomaly_kind"}
+        )
+        if Path(path) in {config.crop_manifest, config.gold_manifest} and requested & sensitive:
+            assert kwargs.get("filters") is not None
+            assert "locked" not in table.column("crop_id").to_pylist()
+        return table
+
+    monkeypatch.setattr(finetune_module.pq, "read_table", guarded_read_table)
+
+    finetune_real_fold(config, held_out_fold=0)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ("missing_provenance", "real_manifest_sha256"),
+        ("real_hash", "real manifest hash"),
+        ("crop_hash", "crop manifest hash"),
+        ("calibrated", "calibrated"),
+        ("catalog_gap", "catalog indices"),
+        ("catalog_duplicate", "catalog indices"),
+    ],
+)
+def test_finetune_rejects_invalid_adapted_lineage_before_output_creation(
+    tmp_path: Path, mutation: str, match: str
+) -> None:
+    config = _inputs(tmp_path)
+    checkpoint = torch.load(config.adapted_checkpoint, map_location="cpu", weights_only=True)
+    if mutation == "missing_provenance":
+        checkpoint.pop("real_manifest_sha256")
+    elif mutation == "real_hash":
+        checkpoint["real_manifest_sha256"] = "0" * 64
+    elif mutation == "crop_hash":
+        checkpoint["crop_manifest_sha256"] = "0" * 64
+    elif mutation == "calibrated":
+        checkpoint["calibrated_for_block_decisions"] = True
+    elif mutation == "catalog_gap":
+        checkpoint["char_to_id"] = {"A": 1}
+    else:
+        checkpoint["char_to_id"] = {"A": 0, "B": 0}
+    torch.save(checkpoint, config.adapted_checkpoint)
+
+    with pytest.raises(ValueError, match=match):
+        finetune_real_fold(config, held_out_fold=0)
+    assert not config.output_dir.exists()
 
 
 @pytest.mark.parametrize(
