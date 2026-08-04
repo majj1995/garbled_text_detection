@@ -322,6 +322,92 @@ def test_real_data_split_command_emits_fold_audit(
     assert f"audit={paths.audit}" in result.stdout
 
 
+def test_real_data_mine_command_delegates_trusted_inputs_and_emits_queue(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifacts = SimpleNamespace(
+        queue=tmp_path / "mined" / "queue.parquet",
+        metadata=tmp_path / "mined" / "mining-audit.json",
+        review_scores=tmp_path / "mined" / "review-scores.jsonl",
+        review_disagreements=tmp_path / "mined" / "review-disagreements.jsonl",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_mine(scores: Path, policy: object, **kwargs: object) -> SimpleNamespace:
+        captured.update(scores=scores, policy=policy, **kwargs)
+        return artifacts
+
+    monkeypatch.setattr(cli, "mine_candidates", fake_mine)
+    result = runner.invoke(
+        cli.app,
+        [
+            "real-data",
+            "mine",
+            "--scores",
+            str(tmp_path / "scores.parquet"),
+            "--real-manifest",
+            str(tmp_path / "real.parquet"),
+            "--fold-manifest",
+            str(tmp_path / "folds.parquet"),
+            "--output-dir",
+            str(tmp_path / "mined"),
+            "--overall-limit",
+            "75",
+            "--per-product-cap",
+            "5",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["real_manifest"] == tmp_path / "real.parquet"
+    assert captured["fold_manifest"] == tmp_path / "folds.parquet"
+    policy = captured["policy"]
+    assert isinstance(policy, cli.MiningPolicy)
+    assert policy.overall_limit == 75
+    assert policy.per_product_cap == 5
+    assert f"queue={artifacts.queue}" in result.stdout
+    assert f"review_scores={artifacts.review_scores}" in result.stdout
+
+
+def test_real_data_mining_yield_delegates_review_import_lineage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifacts = SimpleNamespace(
+        dataset_version=tmp_path / "v2" / "dataset-version.json",
+        audit=tmp_path / "v2" / "mining-yield-audit.json",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_record(*args: object, **kwargs: object) -> SimpleNamespace:
+        captured["args"] = args
+        captured.update(kwargs)
+        return artifacts
+
+    monkeypatch.setattr(cli, "record_mining_yield", fake_record)
+    result = runner.invoke(
+        cli.app,
+        [
+            "real-data",
+            "mining-yield",
+            "--candidate-queue",
+            str(tmp_path / "queue.parquet"),
+            "--reviewed-gold",
+            str(tmp_path / "gold-crops.parquet"),
+            "--import-audit",
+            str(tmp_path / "import-audit.json"),
+            "--base-real-manifest",
+            str(tmp_path / "manifest.parquet"),
+            "--output-dir",
+            str(tmp_path / "v2"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["base_real_manifest"] == tmp_path / "manifest.parquet"
+    assert captured["previous_gold_manifest"] is None
+    assert f"dataset_version={artifacts.dataset_version}" in result.stdout
+
+
 def test_real_data_crops_and_review_commands_emit_versioned_artifacts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

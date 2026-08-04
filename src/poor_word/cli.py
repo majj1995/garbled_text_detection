@@ -20,6 +20,7 @@ from poor_word.glyphs.generate import GenerationConfig, generate_dataset
 from poor_word.ocr.paddle_v5 import PaddleV5Adapter
 from poor_word.real_data.crops import extract_character_crops
 from poor_word.real_data.ingest import import_real_dataset
+from poor_word.real_data.mining import MiningPolicy, mine_candidates, record_mining_yield
 from poor_word.real_data.review import (
     build_review_queue,
     export_review_queue,
@@ -118,9 +119,13 @@ def _write_run_metadata(
     manifest: Path,
 ) -> Path:
     actual_rows = pq.read_table(manifest).num_rows
-    expected_rows = len(generation.characters) * len(generation.font_paths) * (
-        generation.normal_per_char
-        + len(generation.operators) * generation.abnormal_per_operator
+    expected_rows = (
+        len(generation.characters)
+        * len(generation.font_paths)
+        * (
+            generation.normal_per_char
+            + len(generation.operators) * generation.abnormal_per_operator
+        )
     )
     lock_paths = sorted((config.repo_root / "data/locks").glob("*.lock.json"))
     payload = {
@@ -407,9 +412,7 @@ def real_data_split_command(
     seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
 ) -> None:
     """Assign leakage-safe group folds with exact and perceptual duplicate closure."""
-    artifacts = assign_group_folds(
-        manifest, image_root, output_dir, folds=folds, seed=seed
-    )
+    artifacts = assign_group_folds(manifest, image_root, output_dir, folds=folds, seed=seed)
     typer.echo(f"folds={artifacts.folds}")
     typer.echo(f"audit={artifacts.audit}")
 
@@ -433,6 +436,82 @@ def real_data_crops_command(
         ocr_audit=ocr_audit,
     )
     typer.echo(f"crops={artifacts.manifest}")
+    typer.echo(f"audit={artifacts.audit}")
+
+
+@real_data_app.command("mine")
+def real_data_mine_command(
+    scores: Annotated[Path, typer.Option("--scores")],
+    real_manifest: Annotated[Path, typer.Option("--real-manifest")],
+    fold_manifest: Annotated[Path, typer.Option("--fold-manifest")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    normal_false_positive_threshold: Annotated[
+        float, typer.Option("--normal-fp-threshold", min=0, max=1)
+    ] = 0.8,
+    disagreement_threshold: Annotated[
+        float, typer.Option("--disagreement-threshold", min=0, max=1)
+    ] = 0.25,
+    threshold_band_low: Annotated[float, typer.Option("--threshold-band-low", min=0, max=1)] = 0.45,
+    threshold_band_high: Annotated[
+        float, typer.Option("--threshold-band-high", min=0, max=1)
+    ] = 0.55,
+    abnormal_attention_threshold: Annotated[
+        float, typer.Option("--abnormal-attention-threshold", min=0, max=1)
+    ] = 0.8,
+    style_novelty_threshold: Annotated[
+        float, typer.Option("--style-novelty-threshold", min=0, max=1)
+    ] = 0.8,
+    overall_limit: Annotated[int, typer.Option("--overall-limit", min=1)] = 500,
+    per_product_cap: Annotated[int, typer.Option("--per-product-cap", min=1)] = 25,
+    per_template_cap: Annotated[int, typer.Option("--per-template-cap", min=1)] = 10,
+    per_source_cap: Annotated[int, typer.Option("--per-source-cap", min=1)] = 50,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
+) -> None:
+    """Mine a provenance-checked candidate queue for human review only."""
+    artifacts = mine_candidates(
+        scores,
+        MiningPolicy(
+            normal_false_positive_threshold=normal_false_positive_threshold,
+            disagreement_threshold=disagreement_threshold,
+            threshold_band_low=threshold_band_low,
+            threshold_band_high=threshold_band_high,
+            abnormal_attention_threshold=abnormal_attention_threshold,
+            style_novelty_threshold=style_novelty_threshold,
+            overall_limit=overall_limit,
+            per_product_cap=per_product_cap,
+            per_template_cap=per_template_cap,
+            per_source_cap=per_source_cap,
+            seed=seed,
+        ),
+        real_manifest=real_manifest,
+        fold_manifest=fold_manifest,
+        output_dir=output_dir,
+    )
+    typer.echo(f"queue={artifacts.queue}")
+    typer.echo(f"metadata={artifacts.metadata}")
+    typer.echo(f"review_scores={artifacts.review_scores}")
+    typer.echo(f"review_disagreements={artifacts.review_disagreements}")
+
+
+@real_data_app.command("mining-yield")
+def real_data_mining_yield_command(
+    candidate_queue: Annotated[Path, typer.Option("--candidate-queue")],
+    reviewed_gold: Annotated[Path, typer.Option("--reviewed-gold")],
+    import_audit: Annotated[Path, typer.Option("--import-audit")],
+    base_real_manifest: Annotated[Path, typer.Option("--base-real-manifest")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    previous_gold: Annotated[Path | None, typer.Option("--previous-gold")] = None,
+) -> None:
+    """Record trusted review yield and publish the next dataset lineage version."""
+    artifacts = record_mining_yield(
+        candidate_queue,
+        reviewed_gold,
+        import_audit,
+        base_real_manifest=base_real_manifest,
+        output_dir=output_dir,
+        previous_gold_manifest=previous_gold,
+    )
+    typer.echo(f"dataset_version={artifacts.dataset_version}")
     typer.echo(f"audit={artifacts.audit}")
 
 

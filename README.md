@@ -281,3 +281,57 @@ uv run poor-word review import \
 `REVIEW` 保持未解决状态，绝不会写入 `gold-crops.parquet`。已接受的 `PASS`/`BLOCK`
 标签不可被其他审核者覆盖；增量导入时通过 `--existing-gold` 指向之前版本的
 `gold-crops.parquet`。所有队列和 gold 输出目录以内容哈希版本化。
+
+## 困难样本挖掘与下一数据版本
+
+挖掘输入可以是不可变 Parquet 或 JSONL，每个字符候选都必须携带
+`crop_id`、`image_id`、安全相对 `crop_path`、`crop_sha256`、
+`source_image_sha256`、真实/折叠清单字段及其 SHA-256、两个模型的风险分数与检查点
+SHA-256、MIL attention，以及 `style_cluster_id`、`style_novelty_score` 和
+`style_is_unseen`。命令会先与冻结的真实和折叠清单联接；未知图片、来源/折叠不一致、
+不合规来源和哈希错误都会失败。`LOCKED_TEST`/`fold=-1` 只计入跳过审计，绝不进入队列。
+
+```bash
+uv run poor-word real-data mine \
+  --scores artifacts/mining-input-v1.parquet \
+  --real-manifest data/real/versioned/seed-v1/manifest.parquet \
+  --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet \
+  --overall-limit 500 --per-product-cap 25 --per-template-cap 10 \
+  --per-source-cap 50 --seed 20260804 \
+  --output-dir data/real/mining/candidates-v1
+```
+
+输出目录一次性发布 `queue.parquet`、`mining-audit.json`，以及可直接交给现有快审导出
+命令的 `review-scores.jsonl` 和 `review-disagreements.jsonl`。队列覆盖正常图高风险误报、
+双模型分歧、阈值带、异常 bag 高 attention 和新风格簇；重复内容及单一 product、template、
+source 的过量候选会被抑制并记录。候选只有 `label_source=mining_candidate` 和
+`is_gold=false`，不会包含人工决策或审核者字段，也绝不会直接写入 gold。
+
+安全人工闭环如下：
+
+```bash
+uv run poor-word review export \
+  --crops data/real/versioned/seed-v1/crops-v1/crops.parquet \
+  --crop-root data/real/versioned/seed-v1/crops-v1 \
+  --scores data/real/mining/candidates-v1/review-scores.jsonl \
+  --disagreements data/real/mining/candidates-v1/review-disagreements.jsonl \
+  --output-dir data/real/review-queues --limit 500 --seed 20260804
+
+uv run poor-word review import \
+  --labels review-complete.jsonl \
+  --queue data/real/review-queues/queue-<queue-version> \
+  --output-dir data/real/reviewed-gold
+
+uv run poor-word real-data mining-yield \
+  --candidate-queue data/real/mining/candidates-v1/queue.parquet \
+  --reviewed-gold data/real/reviewed-gold/gold-<version>/gold-crops.parquet \
+  --import-audit data/real/reviewed-gold/gold-<version>/import-audit.json \
+  --base-real-manifest data/real/versioned/seed-v1/manifest.parquet \
+  --output-dir data/real/versioned/seed-v2
+```
+
+`mining-yield` 只接受 Task 3 人工导入产出的可信 gold 和审计，校验新增字符确实来自候选
+队列及其模型/图片/裁剪链路，然后只写 `dataset-version.json` 和 yield 审计；它不创建、
+复制或改写 gold。分母明确为该次 import audit 的 `accepted_label_count + review_count`。
+候选是有偏采样，因此该 yield **不是现网异常率估计**；`0.001` 只作为现网基准率上下文，
+本命令不批准生产阈值。该流程是 CPU 元数据处理，无 L20/GPU 特殊要求。
