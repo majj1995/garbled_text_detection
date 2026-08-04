@@ -4,8 +4,12 @@ version = "0.1.0"
 description = "Isolated PP-OCRv5 server runtime for poor-word"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+  "fastapi>=0.116,<1",
+  "numpy>=1.26,<2",
   "paddleocr>=3.2,<4",
   "paddlepaddle-gpu==3.3.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "pillow>=11,<12",
+  "uvicorn>=0.35,<1",
 ]
 
 [tool.uv]

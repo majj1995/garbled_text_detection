@@ -36,6 +36,28 @@ uv sync --all-groups
 uv sync --project environments/ocr
 ```
 
+在 L20 上启动只监听回环地址的 OCR 服务：
+
+```bash
+POOR_WORD_OCR_DEVICE=gpu:0 \
+  uv run --project environments/ocr python environments/ocr/service.py
+```
+
+另一个终端从主环境执行能力与延迟审计：
+
+```bash
+uv run poor-word ocr audit \
+  --endpoint http://127.0.0.1:8765 \
+  --image-dir data/generated/smoke-a/images \
+  --warmup 10 \
+  --runs 30 \
+  --output artifacts/ocr-audit-l20.json
+```
+
+PaddleOCR 标准 OCR 结果只有行级 `rec_texts/rec_scores/rec_polys/rec_boxes`。若服务
+尚未提供真实字符框或解码前 logits，审计仍会写出 JSON，但以退出码 2 标记能力缺口；
+系统不会把等宽切分框伪装成模型输出。
+
 ## 锁定数据源
 
 来源声明记录在 `data/sources.toml`。`lock` 首次下载并记录重定向后的 URL、文件大小、

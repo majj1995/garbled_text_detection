@@ -631,6 +631,9 @@ git commit -m "feat: build versioned synthetic glyph datasets"
 ### Task 7: Add the PP-OCRv5 server adapter and L20 capability audit
 
 **Files:**
+- Create: `environments/ocr/service.py`
+- Modify: `environments/ocr/pyproject.toml`
+- Modify: `environments/ocr/uv.lock`
 - Create: `src/poor_word/ocr/__init__.py`
 - Create: `src/poor_word/ocr/types.py`
 - Create: `src/poor_word/ocr/paddle_v5.py`
@@ -677,9 +680,9 @@ Run: `uv run pytest tests/ocr/test_paddle_v5.py -q`
 
 Expected: FAIL because the OCR modules do not exist; the failure output must not contain a Paddle import error.
 
-- [ ] **Step 3: Implement OCR-neutral records and lazy adapter construction**
+- [ ] **Step 3: Implement OCR-neutral records and split-runtime adapter construction**
 
-Define frozen Pydantic records for polygons, text, confidence, character boxes, Top-K candidates, logits availability, model names, and per-stage milliseconds. `PaddleV5Adapter.__init__` accepts an injected backend implementing `predict(image: str | np.ndarray) -> dict[str, object]` for tests. If no backend is supplied, import PaddleOCR inside `__init__` and instantiate exactly `PP-OCRv5_server_det` and `PP-OCRv5_server_rec` with character coordinates enabled.
+Define frozen Pydantic records for polygons, text, confidence, character boxes, Top-K candidates, logits availability, model names, and per-stage milliseconds. `PaddleV5Adapter.__init__` accepts an injected backend implementing `predict(image: str | np.ndarray) -> dict[str, object]` for tests. If no backend is supplied, use the HTTP backend for the isolated OCR runtime. Only `environments/ocr/service.py` imports PaddleOCR, and it instantiates exactly `PP-OCRv5_server_det` and `PP-OCRv5_server_rec`. Standard Paddle output remains line-level; character boxes and logits are reported unavailable until a real recognition-head adapter supplies them.
 
 - [ ] **Step 4: Implement explicit capability audit behavior**
 
@@ -696,17 +699,18 @@ uv run pytest tests/ocr/test_paddle_v5.py -q
 L20 experiment host run:
 
 ```bash
-uv sync --extra ocr
-uv run poor-word ocr audit --image-dir data/generated/smoke-a/images --warmup 10 --runs 30 --output artifacts/ocr-audit-l20.json
+uv sync --project environments/ocr
+POOR_WORD_OCR_DEVICE=gpu:0 uv run --project environments/ocr python environments/ocr/service.py
+uv run poor-word ocr audit --endpoint http://127.0.0.1:8765 --image-dir data/generated/smoke-a/images --warmup 10 --runs 30 --output artifacts/ocr-audit-l20.json
 ```
 
-Expected: CPU tests pass. The L20 JSON reports both server model names, `character_boxes_available=true`, measured latency percentiles, and an explicit boolean for logits availability.
+Expected: CPU tests pass. The L20 JSON reports both server model names, measured latency percentiles, and explicit booleans for character boxes and logits. The command exits 2 while genuine character coordinates are unavailable, while retaining the audit JSON for engineering review.
 
 - [ ] **Step 6: Commit the OCR adapter and audit**
 
 ```bash
-git add src/poor_word/ocr src/poor_word/cli.py tests/ocr
-git commit -m "feat: audit PP-OCRv5 server outputs"
+git add environments/ocr src/poor_word/ocr src/poor_word/cli.py tests/ocr
+git commit -m "feature: audit PP-OCRv5 server outputs"
 ```
 
 ### Task 8: Implement the glyph encoder, prototype bank, and OOD scoring

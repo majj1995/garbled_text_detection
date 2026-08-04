@@ -15,12 +15,15 @@ from poor_word.data.manifest import SourceSpec, load_source_lock, load_source_sp
 from poor_word.glyphs.catalog import load_common_chars
 from poor_word.glyphs.corrupt import OPERATORS
 from poor_word.glyphs.generate import GenerationConfig, generate_dataset
+from poor_word.ocr.paddle_v5 import PaddleV5Adapter
 
 app = typer.Typer(no_args_is_help=True)
 data_app = typer.Typer(no_args_is_help=True)
 glyphs_app = typer.Typer(no_args_is_help=True)
+ocr_app = typer.Typer(no_args_is_help=True)
 app.add_typer(data_app, name="data")
 app.add_typer(glyphs_app, name="glyphs")
+app.add_typer(ocr_app, name="ocr")
 
 
 @app.callback()
@@ -149,3 +152,30 @@ def glyphs_generate(
     run_path = _write_run_metadata(config, generation, profile, manifest)
     typer.echo(f"manifest={manifest}")
     typer.echo(f"run={run_path}")
+
+
+@ocr_app.command("audit")
+def ocr_audit(
+    image_dir: Annotated[Path, typer.Option("--image-dir")],
+    output: Annotated[Path, typer.Option("--output")],
+    endpoint: Annotated[str, typer.Option("--endpoint")] = "http://127.0.0.1:8765",
+    warmup: Annotated[int, typer.Option("--warmup", min=0)] = 10,
+    runs: Annotated[int, typer.Option("--runs", min=1)] = 30,
+) -> None:
+    """Audit the isolated PP-OCRv5 server on representative images."""
+    images = tuple(str(path) for path in sorted(image_dir.rglob("*.png")))
+    if not images:
+        raise typer.BadParameter("image directory contains no PNG files", param_hint="--image-dir")
+    audit = PaddleV5Adapter(endpoint=endpoint).audit(images, warmup=warmup, runs=runs)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    part_path = output.with_name(f"{output.name}.part")
+    part_path.write_text(f"{audit.model_dump_json(indent=2)}\n", encoding="utf-8")
+    part_path.replace(output)
+    typer.echo(output)
+
+    server_models = (
+        audit.detection_model_name == "PP-OCRv5_server_det"
+        and audit.recognition_model_name == "PP-OCRv5_server_rec"
+    )
+    if not server_models or not audit.character_boxes_available:
+        raise typer.Exit(code=2)
