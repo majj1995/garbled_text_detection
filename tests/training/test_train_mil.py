@@ -165,6 +165,19 @@ def test_training_is_fold_safe_balanced_and_publishes_best_atomically(tmp_path: 
     assert {"decision", "annotator_id", "anomaly_kind"}.isdisjoint(
         pq.read_schema(artifacts.attention_candidates).names
     )
+    candidate_hashes = {
+        "checkpoint_sha256": _sha256(artifacts.checkpoint),
+        "real_manifest_sha256": _sha256(config.real_manifest),
+        "fold_manifest_sha256": _sha256(config.fold_manifest),
+        "feature_manifest_sha256": _sha256(config.feature_manifest),
+    }
+    assert all(
+        all(row[field] == value for field, value in candidate_hashes.items())
+        for row in candidates
+    )
+    assert metrics["attention_candidates_sha256"] == _sha256(
+        artifacts.attention_candidates
+    )
 
 
 @pytest.mark.parametrize(
@@ -228,5 +241,77 @@ def test_training_rejects_single_class_training_fold(tmp_path: Path) -> None:
             row["training_eligible"] = False
     _write(config.real_manifest, rows)
     with pytest.raises(ValueError, match="both NORMAL and ABNORMAL"):
+        train_mil_fold(config)
+    assert not config.output_dir.exists()
+
+
+@pytest.mark.parametrize("component", [None, ""])
+def test_training_requires_nonempty_component_id_before_output(
+    tmp_path: Path, component: object
+) -> None:
+    config = _inputs(tmp_path)
+    rows = pq.read_table(config.fold_manifest).to_pylist()
+    if component is None:
+        for row in rows:
+            row.pop("component_id")
+    else:
+        rows[0]["component_id"] = component
+    _write(config.fold_manifest, rows)
+
+    with pytest.raises(ValueError, match="component_id"):
+        train_mil_fold(config)
+    assert not config.output_dir.exists()
+
+
+@pytest.mark.parametrize("risk", [-0.1, 1.1, 1e300, float("nan")])
+def test_training_rejects_risk_outside_float32_probability_contract(
+    tmp_path: Path, risk: float
+) -> None:
+    config = _inputs(tmp_path)
+    rows = pq.read_table(config.feature_manifest).to_pylist()
+    rows[0]["risk_score"] = risk
+    _write(config.feature_manifest, rows)
+
+    with pytest.raises(ValueError, match=r"risk_score.*\[0,1\]"):
+        train_mil_fold(config)
+    assert not config.output_dir.exists()
+
+
+@pytest.mark.parametrize("mutation", ["wrong_model_id", "second_model", "second_checkpoint"])
+def test_training_requires_one_canonical_model_per_scoring_fold(
+    tmp_path: Path, mutation: str
+) -> None:
+    config = _inputs(tmp_path)
+    rows = pq.read_table(config.feature_manifest).to_pylist()
+    if mutation == "wrong_model_id":
+        rows[0]["model_id"] = "other-model"
+    else:
+        clone = dict(rows[0])
+        clone["crop_id"] = "nt-2"
+        if mutation == "second_model":
+            clone["model_id"] = "real-fold-1-alternate"
+        else:
+            clone["checkpoint_sha256"] = "e" * 64
+        rows.append(clone)
+    _write(config.feature_manifest, rows)
+
+    with pytest.raises(
+        ValueError, match=r"canonical model|conflicting model provenance"
+    ):
+        train_mil_fold(config)
+    assert not config.output_dir.exists()
+
+
+def test_training_rejects_single_class_validation_before_model_selection(
+    tmp_path: Path,
+) -> None:
+    config = _inputs(tmp_path)
+    rows = pq.read_table(config.real_manifest).to_pylist()
+    for row in rows:
+        if row["image_id"] == "abnormal-valid":
+            row["training_eligible"] = False
+    _write(config.real_manifest, rows)
+
+    with pytest.raises(ValueError, match="validation fold requires both NORMAL and ABNORMAL"):
         train_mil_fold(config)
     assert not config.output_dir.exists()

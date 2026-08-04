@@ -173,12 +173,11 @@ def _load_inputs(
         if role != real[image_id]["split_role"]:
             raise ValueError("real and fold manifest split_role mismatch")
         component = row.get("component_id")
-        if component is not None:
-            if not isinstance(component, str) or not component:
-                raise ValueError("fold manifest has malformed component_id")
-            previous = component_folds.setdefault(component, fold)
-            if previous != fold:
-                raise ValueError("component_id crosses folds")
+        if not isinstance(component, str) or not component:
+            raise ValueError("fold manifest requires nonempty component_id")
+        previous = component_folds.setdefault(component, fold)
+        if previous != fold:
+            raise ValueError("component_id crosses folds")
         folds[image_id] = row
     if set(folds) != set(real):
         raise ValueError("fold manifest image IDs do not match real manifest")
@@ -187,6 +186,7 @@ def _load_inputs(
     features: dict[str, list[_Feature]] = {image_id: [] for image_id in real}
     crop_ids: set[str] = set()
     feature_models: set[tuple[str, str, int]] = set()
+    fold_model_claims: dict[int, tuple[str, str]] = {}
     for row in feature_rows:
         crop_id = _required_text(row, "crop_id", "feature manifest")
         image_id = _required_text(row, "image_id", "feature manifest")
@@ -204,9 +204,19 @@ def _load_inputs(
         if feature_fold != image_fold:
             raise ValueError("feature scoring fold does not match assigned image fold")
         risk = row.get("risk_score", row.get("evidence"))
-        if not isinstance(risk, (int, float)) or isinstance(risk, bool) or not math.isfinite(risk):
-            raise ValueError("feature manifest requires finite risk_score")
+        if (
+            not isinstance(risk, (int, float))
+            or isinstance(risk, bool)
+            or not math.isfinite(risk)
+            or not 0.0 <= risk <= 1.0
+        ):
+            raise ValueError("feature manifest requires finite risk_score within [0,1]")
+        risk32 = float(torch.tensor(float(risk), dtype=torch.float32).item())
+        if not math.isfinite(risk32) or not 0.0 <= risk32 <= 1.0:
+            raise ValueError("feature manifest requires finite risk_score within [0,1]")
         model_id = _required_text(row, "model_id", "feature manifest")
+        if model_id != f"real-fold-{feature_fold}":
+            raise ValueError("feature manifest requires canonical model_id for scoring fold")
         checkpoint_hash = _required_text(row, "checkpoint_sha256", "feature manifest")
         if len(checkpoint_hash) != 64 or any(
             char not in "0123456789abcdef" for char in checkpoint_hash
@@ -215,8 +225,12 @@ def _load_inputs(
         claimed_fold_hash = _required_text(row, "fold_manifest_sha256", "feature manifest")
         if claimed_fold_hash != fold_hash:
             raise ValueError("feature fold manifest hash mismatch")
+        claim = (model_id, checkpoint_hash)
+        previous_claim = fold_model_claims.setdefault(feature_fold, claim)
+        if previous_claim != claim:
+            raise ValueError("feature manifest has conflicting model provenance for scoring fold")
         feature_models.add((model_id, checkpoint_hash, feature_fold))
-        features[image_id].append(_Feature(crop_id, float(risk)))
+        features[image_id].append(_Feature(crop_id, risk32))
 
     train: list[_Bag] = []
     validation: list[_Bag] = []
@@ -248,6 +262,9 @@ def _load_inputs(
     abnormal = sum(bag.label == 1 for bag in train)
     if not normal or not abnormal:
         raise ValueError("training fold requires both NORMAL and ABNORMAL images")
+    validation_labels = {bag.label for bag in validation}
+    if validation_labels != {0.0, 1.0}:
+        raise ValueError("validation fold requires both NORMAL and ABNORMAL images")
     model_provenance = [
         {
             "model_id": model_id,
@@ -337,6 +354,10 @@ def _parquet_bytes(rows: list[dict[str, object]]) -> bytes:
             ("image_risk_score", pa.float64()),
             ("label_source", pa.string()),
             ("is_gold", pa.bool_()),
+            ("checkpoint_sha256", pa.string()),
+            ("real_manifest_sha256", pa.string()),
+            ("fold_manifest_sha256", pa.string()),
+            ("feature_manifest_sha256", pa.string()),
         ]
     )
     sink = pa.BufferOutputStream()
@@ -465,8 +486,11 @@ def train_mil_fold(config: MilTrainConfig) -> MilArtifacts:
             checkpoint,
         )
         checkpoint_hash = _sha256(checkpoint)
+        for row in candidates:
+            row.update({"checkpoint_sha256": checkpoint_hash, **hashes})
         candidate_path = staging / "attention-candidates.parquet"
         candidate_path.write_bytes(_parquet_bytes(candidates))
+        candidate_hash = _sha256(candidate_path)
         metrics = {
             "held_out_fold": config.held_out_fold,
             "train_image_ids": train_ids,
@@ -480,6 +504,7 @@ def train_mil_fold(config: MilTrainConfig) -> MilArtifacts:
             "steps": steps,
             "history": history,
             "checkpoint_sha256": checkpoint_hash,
+            "attention_candidates_sha256": candidate_hash,
             "feature_model_provenance": feature_model_provenance,
             **hashes,
             **provenance,

@@ -16,6 +16,7 @@ def test_attention_masks_padding_and_normalizes_nonempty_bags() -> None:
     assert torch.all(attention >= 0)
     assert attention[0, 2].item() == 0.0
     assert attention[0, :2].sum().item() == 1.0
+    assert attention[0, 1] > attention[0, 0]
 
 
 def test_zero_character_bag_has_finite_deterministic_fallback() -> None:
@@ -33,7 +34,7 @@ def test_zero_character_bag_has_finite_deterministic_fallback() -> None:
 def test_instance_permutation_preserves_bag_logit_and_permutes_attention() -> None:
     torch.manual_seed(9)
     model = AttentionMilPool(feature_dim=3, hidden_dim=5)
-    features = torch.randn(1, 4, 3)
+    features = torch.rand(1, 4, 3)
     mask = torch.tensor([[True, True, True, False]])
     permutation = torch.tensor([2, 0, 3, 1])
 
@@ -47,11 +48,11 @@ def test_instance_permutation_preserves_bag_logit_and_permutes_attention() -> No
 def test_increasing_one_evidence_value_cannot_reduce_bag_risk() -> None:
     torch.manual_seed(2)
     model = AttentionMilPool(feature_dim=3, hidden_dim=6)
-    features = torch.randn(2, 4, 3)
+    features = torch.rand(2, 4, 3)
     mask = torch.tensor([[True, True, True, False], [True, False, False, False]])
     raised = features.clone()
-    raised[0, 1, 0] += 7.0
-    raised[1, 0, 0] += 7.0
+    raised[0, 1, 0] = torch.clamp(raised[0, 1, 0] + 0.2, max=1.0)
+    raised[1, 0, 0] = torch.clamp(raised[1, 0, 0] + 0.2, max=1.0)
 
     before, _ = model(features, mask)
     after, _ = model(raised, mask)

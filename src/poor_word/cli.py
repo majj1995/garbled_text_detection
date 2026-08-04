@@ -329,6 +329,11 @@ def train_mil_command(
     batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 32,
     patience: Annotated[int, typer.Option("--patience", min=1)] = 5,
     min_delta: Annotated[float, typer.Option("--min-delta", min=0)] = 1e-4,
+    learning_rate: Annotated[float, typer.Option("--learning-rate", min=0.0000001)] = 1e-3,
+    normal_instance_weight: Annotated[
+        float, typer.Option("--normal-instance-weight", min=0)
+    ] = 0.25,
+    hidden_dim: Annotated[int, typer.Option("--hidden-dim", min=1)] = 32,
     seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
     device: Annotated[str, typer.Option("--device")] = "cuda",
 ) -> None:
@@ -345,6 +350,9 @@ def train_mil_command(
             batch_size=batch_size,
             patience=patience,
             min_delta=min_delta,
+            learning_rate=learning_rate,
+            normal_instance_weight=normal_instance_weight,
+            hidden_dim=hidden_dim,
             seed=seed,
             device=device,
         )

@@ -445,12 +445,21 @@ def test_mil_command_delegates_trusted_manifests_and_emits_outputs(
             "cpu",
             "--max-steps",
             "1",
+            "--learning-rate",
+            "0.002",
+            "--normal-instance-weight",
+            "0.4",
+            "--hidden-dim",
+            "7",
         ],
     )
 
     assert result.exit_code == 0
     assert len(captured) == 1
     assert captured[0].held_out_fold == 2
+    assert captured[0].learning_rate == 0.002
+    assert captured[0].normal_instance_weight == 0.4
+    assert captured[0].hidden_dim == 7
     assert f"checkpoint={artifacts.checkpoint}" in result.stdout
     assert f"metrics={artifacts.metrics}" in result.stdout
     assert f"attention_candidates={artifacts.attention_candidates}" in result.stdout
