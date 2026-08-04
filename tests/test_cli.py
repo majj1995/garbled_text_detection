@@ -203,6 +203,70 @@ def test_adapt_real_command_rejects_singleton_batch_size(
     assert result.exit_code == 2
 
 
+def test_real_oof_command_runs_all_five_folds_and_emits_outputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifacts: list[SimpleNamespace] = []
+
+    def fake_finetune(config: object, held_out_fold: int) -> SimpleNamespace:
+        artifact = SimpleNamespace(
+            held_out_fold=held_out_fold,
+            checkpoint=tmp_path / f"fold-{held_out_fold}.pt",
+            scores=tmp_path / f"fold-{held_out_fold}.parquet",
+            metrics=tmp_path / f"fold-{held_out_fold}.json",
+        )
+        artifacts.append(artifact)
+        return artifact
+
+    oof = tmp_path / "oof" / "oof.parquet"
+    monkeypatch.setattr(cli, "finetune_real_fold", fake_finetune)
+    monkeypatch.setattr(cli, "collect_oof_scores", lambda *_args, **_kwargs: oof)
+    result = runner.invoke(
+        cli.app,
+        [
+            "train",
+            "real-oof",
+            "--real-manifest",
+            str(tmp_path / "real.parquet"),
+            "--crop-manifest",
+            str(tmp_path / "crops.parquet"),
+            "--gold-manifest",
+            str(tmp_path / "gold.parquet"),
+            "--fold-manifest",
+            str(tmp_path / "folds.parquet"),
+            "--synthetic-manifest",
+            str(tmp_path / "synthetic.parquet"),
+            "--adapted-checkpoint",
+            str(tmp_path / "adapted.pt"),
+            "--output-dir",
+            str(tmp_path / "real-oof"),
+            "--device",
+            "cpu",
+            "--max-steps",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert [artifact.held_out_fold for artifact in artifacts] == list(range(5))
+    assert f"oof={oof}" in result.stdout
+
+
+def test_real_oof_help_lists_all_provenance_inputs() -> None:
+    result = runner.invoke(cli.app, ["train", "real-oof", "--help"])
+
+    assert result.exit_code == 0
+    for option in (
+        "--real-manifest",
+        "--crop-manifest",
+        "--gold-manifest",
+        "--fold-manifest",
+        "--synthetic-manifest",
+        "--adapted-checkpoint",
+    ):
+        assert option in result.stdout
+
+
 def test_real_data_import_command_emits_versioned_artifacts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -12,6 +12,7 @@ import typer
 from poor_word.config import PathsConfig
 from poor_word.data.download import fetch_locked_source, lock_source
 from poor_word.data.manifest import SourceSpec, load_source_lock, load_source_specs
+from poor_word.evaluation.oof import collect_oof_scores
 from poor_word.evaluation.report import evaluate_glyph_artifacts
 from poor_word.glyphs.catalog import load_common_chars
 from poor_word.glyphs.corrupt import OPERATORS
@@ -26,6 +27,7 @@ from poor_word.real_data.review import (
 )
 from poor_word.real_data.split import assign_group_folds
 from poor_word.training.adapt_real import AdaptConfig, adapt_real_encoder
+from poor_word.training.finetune_real import RealFineTuneConfig, finetune_real_fold
 from poor_word.training.train_glyph import TrainConfig, train_glyph
 
 app = typer.Typer(no_args_is_help=True)
@@ -259,6 +261,50 @@ def train_adapt_real_command(
     )
     typer.echo(f"checkpoint={artifacts.checkpoint}")
     typer.echo(f"metrics={artifacts.metrics}")
+
+
+@train_app.command("real-oof")
+def train_real_oof_command(
+    real_manifest: Annotated[Path, typer.Option("--real-manifest")],
+    crop_manifest: Annotated[Path, typer.Option("--crop-manifest")],
+    gold_manifest: Annotated[Path, typer.Option("--gold-manifest")],
+    fold_manifest: Annotated[Path, typer.Option("--fold-manifest")],
+    synthetic_manifest: Annotated[Path, typer.Option("--synthetic-manifest")],
+    adapted_checkpoint: Annotated[Path, typer.Option("--adapted-checkpoint")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    epochs: Annotated[int, typer.Option("--epochs", min=1)] = 10,
+    max_steps: Annotated[int | None, typer.Option("--max-steps", min=1)] = None,
+    batch_size: Annotated[int, typer.Option("--batch-size", min=2)] = 64,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
+    device: Annotated[str, typer.Option("--device")] = "cuda",
+    learning_rate: Annotated[float, typer.Option("--learning-rate", min=0.0000001)] = 1e-4,
+) -> None:
+    """Fine-tune five leakage-safe models and publish development OOF scores."""
+    artifacts = []
+    for held_out_fold in range(5):
+        artifacts.append(
+            finetune_real_fold(
+                RealFineTuneConfig(
+                    real_manifest=real_manifest,
+                    crop_manifest=crop_manifest,
+                    gold_manifest=gold_manifest,
+                    fold_manifest=fold_manifest,
+                    synthetic_manifest=synthetic_manifest,
+                    adapted_checkpoint=adapted_checkpoint,
+                    output_dir=output_dir / f"fold-{held_out_fold}",
+                    epochs=epochs,
+                    max_steps=max_steps,
+                    batch_size=batch_size,
+                    seed=seed,
+                    device=device,
+                    learning_rate=learning_rate,
+                ),
+                held_out_fold,
+            )
+        )
+    oof = collect_oof_scores(artifacts, fold_manifest, output_dir / "oof")
+    typer.echo(f"oof={oof}")
+    typer.echo(f"metrics={oof.parent / 'metrics.json'}")
 
 
 @evaluate_app.command("glyph")
