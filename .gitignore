@@ -8,5 +8,4 @@ __pycache__/
 artifacts/
 data/raw/
 data/generated/
-models/
-
+/models/

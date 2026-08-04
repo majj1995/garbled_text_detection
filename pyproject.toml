@@ -57,3 +57,7 @@ packages = ["poor_word"]
 [[tool.mypy.overrides]]
 module = "poor_word.glyphs.corrupt"
 disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = "poor_word.models.prototypes"
+disallow_untyped_calls = false
