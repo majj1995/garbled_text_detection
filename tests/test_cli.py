@@ -267,6 +267,40 @@ def test_real_oof_help_lists_all_provenance_inputs() -> None:
         assert option in result.stdout
 
 
+def test_real_nested_oof_command_delegates_all_provenance_inputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: list[object] = []
+    artifact = SimpleNamespace(manifest=tmp_path / "nested" / "nested-manifest.json")
+
+    def fake_train(config: object) -> object:
+        captured.append(config)
+        return artifact
+
+    monkeypatch.setattr(cli, "train_nested_real_oof", fake_train)
+    values = {
+        "real-manifest": "real.parquet",
+        "crop-manifest": "crops.parquet",
+        "gold-manifest": "gold.parquet",
+        "fold-manifest": "folds.parquet",
+        "synthetic-manifest": "synthetic.parquet",
+        "adapted-checkpoint": "adapted.pt",
+        "output-dir": "nested",
+    }
+    args = ["train", "real-nested-oof"]
+    for option, value in values.items():
+        args.extend([f"--{option}", str(tmp_path / value)])
+    args.extend(["--device", "cpu", "--max-steps", "1"])
+
+    result = runner.invoke(cli.app, args)
+
+    assert result.exit_code == 0
+    assert len(captured) == 1
+    assert captured[0].device == "cpu"
+    assert captured[0].fold_manifest == tmp_path / "folds.parquet"
+    assert f"nested_manifest={artifact.manifest}" in result.stdout
+
+
 def test_real_data_import_command_emits_versioned_artifacts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -565,7 +599,7 @@ def test_mil_command_delegates_trusted_manifests_and_emits_outputs(
 def test_real_seed_report_command_exposes_and_delegates_all_core_inputs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    help_result = runner.invoke(cli.app, ["evaluate", "real-seed", "--help"], terminal_width=200)
+    help_result = runner.invoke(cli.app, ["evaluate", "real-seed", "--help"], terminal_width=260)
     assert help_result.exit_code == 0
     for option in (
         "--real-manifest",
@@ -581,6 +615,7 @@ def test_real_seed_report_command_exposes_and_delegates_all_core_inputs(
         "--dependency-lock",
         "--character-inventory",
         "--image-inventory",
+        "--nested-manifest",
         "--output-dir",
         "--prevalence",
     ):
@@ -613,6 +648,7 @@ def test_real_seed_report_command_exposes_and_delegates_all_core_inputs(
         "dependency-lock": "uv.lock",
         "character-inventory": "character-model-inventory.json",
         "image-inventory": "image-model-inventory.json",
+        "nested-manifest": "nested-manifest.json",
         "output-dir": "report",
     }
     for option, value in values.items():
@@ -652,8 +688,8 @@ def test_mil_oof_command_delegates_and_emits_atomic_collection(
             str(tmp_path / "real.parquet"),
             "--fold-manifest",
             str(tmp_path / "folds.parquet"),
-            "--feature-manifest",
-            str(tmp_path / "features.parquet"),
+            "--nested-feature-dir",
+            str(tmp_path / "nested-features"),
             "--output-dir",
             str(tmp_path / "oof"),
             "--device",
@@ -665,5 +701,6 @@ def test_mil_oof_command_delegates_and_emits_atomic_collection(
     assert result.exit_code == 0
     assert len(captured) == 1
     assert captured[0].device == "cpu"
+    assert captured[0].nested_feature_dir == tmp_path / "nested-features"
     assert f"image_oof={artifacts.image_oof}" in result.stdout
     assert f"inventory={artifacts.inventory}" in result.stdout

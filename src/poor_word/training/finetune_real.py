@@ -54,6 +54,7 @@ class FoldModelArtifacts:
     scores: Path
     metrics: Path
     scoring_crop_ids: tuple[str, ...]
+    excluded_folds: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -123,9 +124,18 @@ def _safe_path(root: Path, relative: str, crop_id: str) -> Path:
     return resolved
 
 
-def _validated_inputs(config: RealFineTuneConfig, held_out_fold: int) -> _ValidatedInputs:
+def _validated_inputs(
+    config: RealFineTuneConfig,
+    held_out_fold: int,
+    additionally_excluded_fold: int | None = None,
+) -> _ValidatedInputs:
     if held_out_fold < 0:
         raise ValueError("held_out_fold must be a development fold")
+    if additionally_excluded_fold is not None and additionally_excluded_fold < 0:
+        raise ValueError("additional excluded fold must be a development fold")
+    excluded_folds = {held_out_fold}
+    if additionally_excluded_fold is not None:
+        excluded_folds.add(additionally_excluded_fold)
     valid_roles = {role.value for role in SplitRole}
     real = _load_unique(
         config.real_manifest,
@@ -245,6 +255,7 @@ def _validated_inputs(config: RealFineTuneConfig, held_out_fold: int) -> _Valida
             scoring.append(item)
         elif (
             role == SplitRole.DEV.value
+            and fold not in excluded_folds
             and real[image_id]["training_eligible"] is True
             and decision in {Decision.PASS.value, Decision.BLOCK.value}
         ):
@@ -348,7 +359,11 @@ def _parquet_bytes(rows: list[dict[str, object]], schema: pa.Schema) -> bytes:
     return cast(bytes, sink.getvalue().to_pybytes())
 
 
-def finetune_real_fold(config: RealFineTuneConfig, held_out_fold: int) -> FoldModelArtifacts:
+def finetune_real_fold(
+    config: RealFineTuneConfig,
+    held_out_fold: int,
+    additionally_excluded_fold: int | None = None,
+) -> FoldModelArtifacts:
     """Fine-tune one fold and score only its held-out reviewed development crops."""
     if config.output_dir.exists():
         raise ValueError(f"fold output directory already exists: {config.output_dir}")
@@ -358,7 +373,19 @@ def finetune_real_fold(config: RealFineTuneConfig, held_out_fold: int) -> FoldMo
     if config.device.startswith("cuda") and not torch.cuda.is_available():
         raise ValueError(f"CUDA device requested but unavailable: {config.device}")
     device = torch.device(config.device)
-    inputs = _validated_inputs(config, held_out_fold)
+    inputs = _validated_inputs(config, held_out_fold, additionally_excluded_fold)
+    excluded_folds = tuple(
+        sorted(
+            {
+                held_out_fold,
+                *(
+                    []
+                    if additionally_excluded_fold is None
+                    else [additionally_excluded_fold]
+                ),
+            }
+        )
+    )
     synthetic = GlyphDataset(config.synthetic_manifest)
     model, catalog, embedding_dim = _restore_model(config.adapted_checkpoint, config)
     if set(synthetic.char_to_id) - set(catalog):
@@ -505,6 +532,7 @@ def finetune_real_fold(config: RealFineTuneConfig, held_out_fold: int) -> FoldMo
                 "char_to_id": catalog,
                 "config": {"embedding_dim": embedding_dim},
                 "held_out_fold": held_out_fold,
+                "excluded_folds": list(excluded_folds),
                 "real_training_crop_ids": [item.crop_id for item in inputs.training],
                 "scoring_crop_ids": [item.crop_id for item in inputs.scoring],
                 **hashes,
@@ -518,6 +546,7 @@ def finetune_real_fold(config: RealFineTuneConfig, held_out_fold: int) -> FoldMo
                 "image_id": item.image_id,
                 "crop_path": str(item.path.relative_to(config.crop_manifest.parent.resolve())),
                 "fold": held_out_fold,
+                "excluded_folds": list(excluded_folds),
                 "decision": item.decision,
                 "anomaly_kind": item.anomaly_kind,
                 "risk_score": risk,
@@ -538,6 +567,7 @@ def finetune_real_fold(config: RealFineTuneConfig, held_out_fold: int) -> FoldMo
                 ("image_id", pa.string()),
                 ("crop_path", pa.string()),
                 ("fold", pa.int64()),
+                ("excluded_folds", pa.list_(pa.int64())),
                 ("decision", pa.string()),
                 ("anomaly_kind", pa.string()),
                 ("risk_score", pa.float64()),
@@ -558,6 +588,7 @@ def finetune_real_fold(config: RealFineTuneConfig, held_out_fold: int) -> FoldMo
             json.dumps(
                 {
                     "held_out_fold": held_out_fold,
+                    "excluded_folds": list(excluded_folds),
                     "steps": step,
                     "loss_history": history,
                     "real_supervised_count": len(inputs.training),
@@ -587,4 +618,5 @@ def finetune_real_fold(config: RealFineTuneConfig, held_out_fold: int) -> FoldMo
         scores=config.output_dir / "scores.parquet",
         metrics=config.output_dir / "metrics.json",
         scoring_crop_ids=tuple(item.crop_id for item in inputs.scoring),
+        excluded_folds=excluded_folds,
     )

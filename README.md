@@ -360,13 +360,28 @@ uv run poor-word train real-oof \
   --output-dir artifacts/real-oof-v1 \
   --device cuda --epochs 10 --batch-size 64
 
+uv run poor-word train real-nested-oof \
+  --real-manifest data/real/versioned/seed-v1/manifest.parquet \
+  --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet \
+  --gold-manifest data/real/versioned/seed-v1/gold-v1/gold-crops.parquet \
+  --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet \
+  --synthetic-manifest data/generated/mvp-v1/manifest.parquet \
+  --adapted-checkpoint artifacts/glyph-real-adapt-v1/encoder.pt \
+  --output-dir artifacts/real-nested-oof-v1 \
+  --device cuda --epochs 10 --batch-size 64
+
 uv run poor-word train mil-oof \
   --real-manifest data/real/versioned/seed-v1/manifest.parquet \
   --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet \
-  --feature-manifest artifacts/real-oof-v1/oof/oof.parquet \
+  --nested-feature-dir artifacts/real-nested-oof-v1 \
   --output-dir artifacts/mil-oof-v1 \
   --device cuda --epochs 30 --batch-size 32
 ```
+
+`real-nested-oof` 为每个 outer MIL fold 生成一份字符特征。对 outer fold `k`，验证 fold
+`k` 的字符分数来自排除 `k` 的模型；训练中 fold `j != k` 的字符分数来自同时排除 `k`、`j`
+的模型。该命令原子发布带有每个模型 checkpoint/metrics/scores 哈希的
+`nested-manifest.json`。`mil-oof` 拒绝普通单层字符 OOF，仅消费这个嵌套清单。
 
 `mil-oof` 在单一 staging root 中依次运行五折。每折 `image-scores.parquet` 对该折每张
 合规验证图片恰有一行，包括没有检测到字符的 zero-character bag；命令严格验证后才原子
@@ -399,6 +414,7 @@ uv run poor-word evaluate real-seed \
   --dependency-lock uv.lock \
   --character-inventory artifacts/real-oof-v1/model-inventory.json \
   --image-inventory artifacts/mil-oof-v1/model-inventory.json \
+  --nested-manifest artifacts/real-nested-oof-v1/nested-manifest.json \
   --prevalence 0.001 \
   --output-dir artifacts/real-seed-report-v1
 ```

@@ -36,6 +36,8 @@ class MilTrainConfig(BaseModel):
     feature_manifest: Path
     output_dir: Path
     held_out_fold: int = Field(ge=0)
+    outer_fold: int | None = Field(default=None, ge=0)
+    nested_manifest_sha256: str | None = None
     epochs: int = Field(default=30, ge=1)
     max_steps: int | None = Field(default=None, ge=1)
     batch_size: int = Field(default=32, ge=1)
@@ -55,7 +57,8 @@ class MilOofConfig(BaseModel):
 
     real_manifest: Path
     fold_manifest: Path
-    feature_manifest: Path
+    feature_manifest: Path | None = None
+    nested_feature_dir: Path | None = None
     output_dir: Path
     epochs: int = Field(default=30, ge=1)
     max_steps: int | None = Field(default=None, ge=1)
@@ -162,6 +165,8 @@ def compute_mil_loss(
 def _load_inputs(
     config: MilTrainConfig,
 ) -> tuple[list[_Bag], list[_Bag], dict[str, int], list[dict[str, object]]]:
+    if config.feature_manifest is None:
+        raise ValueError("MIL fold requires a feature manifest")
     for path in (config.real_manifest, config.fold_manifest, config.feature_manifest):
         if not path.is_file():
             raise ValueError(f"required manifest does not exist: {path}")
@@ -179,8 +184,13 @@ def _load_inputs(
             filter=ds.field("split_role") != SplitRole.LOCKED_TEST.value,
         ).to_pylist(),
     )
-    fold_rows = cast(list[dict[str, Any]], pq.read_table(config.fold_manifest).to_pylist())
-    feature_rows = cast(list[dict[str, Any]], pq.read_table(config.feature_manifest).to_pylist())
+    fold_rows = cast(
+        list[dict[str, Any]],
+        pq.read_table(
+            config.fold_manifest,
+            columns=["image_id", "fold", "split_role", "component_id"],
+        ).to_pylist(),
+    )
 
     real: dict[str, dict[str, Any]] = {}
     allowed_roles = {role.value for role in SplitRole}
@@ -242,11 +252,48 @@ def _load_inputs(
     if set(folds) != set(real):
         raise ValueError("fold manifest image IDs do not match real manifest")
 
+    feature_columns = [
+        "crop_id",
+        "image_id",
+        "fold",
+        "risk_score",
+        "model_id",
+        "checkpoint_sha256",
+        "fold_manifest_sha256",
+    ]
+    feature_identities = cast(
+        list[dict[str, Any]],
+        pq.read_table(config.feature_manifest, columns=["crop_id", "image_id"]).to_pylist(),
+    )
+    seen_feature_ids: set[str] = set()
+    for identity in feature_identities:
+        crop_id = _required_text(identity, "crop_id", "feature manifest")
+        image_id = _required_text(identity, "image_id", "feature manifest")
+        if crop_id in seen_feature_ids:
+            raise ValueError(f"feature manifest has duplicate crop_id: {crop_id}")
+        seen_feature_ids.add(crop_id)
+        if image_id not in real:
+            raise ValueError(f"feature manifest has unknown image_id: {image_id}")
+        if image_id not in safe_ids:
+            raise ValueError(f"feature manifest contains locked-test feature: {crop_id}")
+    feature_filters: list[tuple[str, str, object]] = [("image_id", "in", sorted(safe_ids))]
+    if config.outer_fold is not None:
+        feature_columns.extend(["held_out_fold", "outer_fold", "excluded_folds"])
+        feature_filters.append(("outer_fold", "=", config.outer_fold))
+    feature_rows = cast(
+        list[dict[str, Any]],
+        pq.read_table(
+            config.feature_manifest,
+            columns=feature_columns,
+            filters=feature_filters,
+        ).to_pylist(),
+    )
+
     fold_hash = _sha256(config.fold_manifest)
     features: dict[str, list[_Feature]] = {image_id: [] for image_id in real}
     crop_ids: set[str] = set()
-    feature_models: set[tuple[str, str, int]] = set()
-    fold_model_claims: dict[int, tuple[str, str]] = {}
+    feature_models: set[tuple[str, str, int, tuple[int, ...]]] = set()
+    fold_model_claims: dict[int, tuple[str, str, tuple[int, ...]]] = {}
     for row in feature_rows:
         crop_id = _required_text(row, "crop_id", "feature manifest")
         image_id = _required_text(row, "image_id", "feature manifest")
@@ -263,6 +310,21 @@ def _load_inputs(
             raise ValueError("feature manifest has malformed scoring fold")
         if feature_fold != image_fold:
             raise ValueError("feature scoring fold does not match assigned image fold")
+        excluded_folds: tuple[int, ...] = (feature_fold,)
+        if config.outer_fold is not None:
+            if row.get("outer_fold") != config.outer_fold:
+                raise ValueError("nested feature outer fold mismatch")
+            raw_excluded = row.get("excluded_folds")
+            if (
+                not isinstance(raw_excluded, list)
+                or not all(type(item) is int for item in raw_excluded)
+                or tuple(sorted(set(raw_excluded))) != tuple(raw_excluded)
+            ):
+                raise ValueError("nested feature has malformed excluded_folds")
+            excluded_folds = tuple(raw_excluded)
+            expected_excluded = tuple(sorted({config.outer_fold, feature_fold}))
+            if excluded_folds != expected_excluded:
+                raise ValueError("nested feature excluded-fold contract mismatch")
         risk = row.get("risk_score", row.get("evidence"))
         if (
             not isinstance(risk, (int, float))
@@ -285,11 +347,11 @@ def _load_inputs(
         claimed_fold_hash = _required_text(row, "fold_manifest_sha256", "feature manifest")
         if claimed_fold_hash != fold_hash:
             raise ValueError("feature fold manifest hash mismatch")
-        claim = (model_id, checkpoint_hash)
+        claim = (model_id, checkpoint_hash, excluded_folds)
         previous_claim = fold_model_claims.setdefault(feature_fold, claim)
         if previous_claim != claim:
             raise ValueError("feature manifest has conflicting model provenance for scoring fold")
-        feature_models.add((model_id, checkpoint_hash, feature_fold))
+        feature_models.add((model_id, checkpoint_hash, feature_fold, excluded_folds))
         features[image_id].append(_Feature(crop_id, risk32))
 
     train: list[_Bag] = []
@@ -325,14 +387,16 @@ def _load_inputs(
     validation_labels = {bag.label for bag in validation}
     if validation_labels != {0.0, 1.0}:
         raise ValueError("validation fold requires both NORMAL and ABNORMAL images")
-    model_provenance = [
-        {
+    model_provenance = []
+    for model_id, checkpoint_hash, scoring_fold, excluded_folds in sorted(feature_models):
+        item: dict[str, object] = {
             "model_id": model_id,
             "checkpoint_sha256": checkpoint_hash,
             "scoring_fold": scoring_fold,
         }
-        for model_id, checkpoint_hash, scoring_fold in sorted(feature_models)
-    ]
+        if config.outer_fold is not None:
+            item["excluded_folds"] = list(excluded_folds)
+        model_provenance.append(item)
     return train, validation, {"NORMAL": normal, "ABNORMAL": abnormal}, model_provenance
 
 
@@ -432,6 +496,7 @@ def _parquet_bytes(rows: list[dict[str, object]]) -> bytes:
             ("real_manifest_sha256", pa.string()),
             ("fold_manifest_sha256", pa.string()),
             ("feature_manifest_sha256", pa.string()),
+            ("nested_manifest_sha256", pa.string()),
         ]
     )
     sink = pa.BufferOutputStream()
@@ -454,6 +519,7 @@ def _image_score_parquet_bytes(rows: list[dict[str, object]]) -> bytes:
             ("real_manifest_sha256", pa.string()),
             ("fold_manifest_sha256", pa.string()),
             ("feature_manifest_sha256", pa.string()),
+            ("nested_manifest_sha256", pa.string()),
         ]
     )
     sink = pa.BufferOutputStream()
@@ -467,6 +533,8 @@ def train_mil_fold(config: MilTrainConfig) -> MilArtifacts:
     """Train and atomically publish the best image-level MIL model for one fold."""
     if config.output_dir.exists():
         raise ValueError(f"MIL output directory already exists: {config.output_dir}")
+    if config.feature_manifest is None:
+        raise ValueError("MIL fold requires a feature manifest")
     train, validation, counts, feature_model_provenance = _load_inputs(config)
     if config.device.startswith("cuda") and not torch.cuda.is_available():
         raise ValueError(f"CUDA device requested but unavailable: {config.device}")
@@ -548,6 +616,8 @@ def train_mil_fold(config: MilTrainConfig) -> MilArtifacts:
         "fold_manifest_sha256": _sha256(config.fold_manifest),
         "feature_manifest_sha256": _sha256(config.feature_manifest),
     }
+    if config.nested_manifest_sha256 is not None:
+        hashes["nested_manifest_sha256"] = config.nested_manifest_sha256
     train_ids = sorted(bag.image_id for bag in train)
     validation_ids = sorted(bag.image_id for bag in validation)
     zero_validation = sorted(bag.image_id for bag in validation if not bag.features)
@@ -717,18 +787,216 @@ def _mil_oof_contract(config: MilOofConfig) -> tuple[dict[int, dict[str, str]], 
     return dict(expected), locked
 
 
+def validate_nested_feature_dir(
+    nested_feature_dir: Path,
+    real_manifest: Path,
+    fold_manifest: Path,
+) -> tuple[dict[int, Path], str]:
+    """Validate actual nested checkpoints, metrics, scores, and feature membership."""
+    manifest = nested_feature_dir / "nested-manifest.json"
+    if not manifest.is_file():
+        raise ValueError("nested feature directory is missing nested-manifest.json")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("kind") != "nested_character_oof":
+        raise ValueError("nested feature manifest has invalid kind")
+    for field, path in (
+        ("real_manifest_sha256", real_manifest),
+        ("fold_manifest_sha256", fold_manifest),
+    ):
+        if payload.get(field) != _sha256(path):
+            raise ValueError(f"nested feature manifest {field} mismatch")
+    entries = payload.get("outer_folds")
+    if not isinstance(entries, list):
+        raise ValueError("nested feature manifest has malformed outer_folds")
+    resolved: dict[int, Path] = {}
+    root = nested_feature_dir.resolve()
+
+    def inventory_path(entry: dict[str, Any], field: str) -> Path:
+        relative = entry.get(field)
+        if not isinstance(relative, str) or not relative:
+            raise ValueError("nested model inventory has malformed artifact path")
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as error:
+            raise ValueError("nested model artifact path escapes directory") from error
+        if not path.is_file():
+            raise ValueError("nested model inventory references a missing artifact")
+        return path
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("nested feature manifest entry is malformed")
+        outer_fold = entry.get("outer_fold")
+        relative = entry.get("features")
+        expected_hash = entry.get("features_sha256")
+        if type(outer_fold) is not int or not isinstance(relative, str) or not relative:
+            raise ValueError("nested feature manifest entry is malformed")
+        candidate = (root / relative).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as error:
+            raise ValueError("nested feature path escapes directory") from error
+        if not candidate.is_file() or not isinstance(expected_hash, str):
+            raise ValueError("nested feature manifest references a missing feature table")
+        if _sha256(candidate) != expected_hash:
+            raise ValueError("nested feature table hash mismatch")
+        models = entry.get("models")
+        if not isinstance(models, list):
+            raise ValueError("nested feature manifest has malformed model inventory")
+        validated_models: set[tuple[int, tuple[int, ...], str]] = set()
+        scoring_ids_by_fold: dict[int, set[str]] = {}
+        training_ids_by_fold: dict[int, tuple[str, ...]] = {}
+        excluded_by_fold: dict[int, tuple[int, ...]] = {}
+        for model_entry in models:
+            if not isinstance(model_entry, dict):
+                raise ValueError("nested model inventory entry is malformed")
+            scoring_fold = model_entry.get("scoring_fold")
+            raw_excluded = model_entry.get("excluded_folds")
+            if (
+                type(scoring_fold) is not int
+                or not isinstance(raw_excluded, list)
+                or not all(type(value) is int for value in raw_excluded)
+            ):
+                raise ValueError("nested model inventory has malformed fold provenance")
+            excluded = tuple(raw_excluded)
+            if excluded != tuple(sorted({outer_fold, scoring_fold})):
+                raise ValueError("nested model inventory excluded-fold contract mismatch")
+            checkpoint_path = inventory_path(model_entry, "checkpoint")
+            metrics_path = inventory_path(model_entry, "metrics")
+            scores_path = inventory_path(model_entry, "scores")
+            for field, artifact_path in (
+                ("checkpoint_sha256", checkpoint_path),
+                ("metrics_sha256", metrics_path),
+                ("scores_sha256", scores_path),
+            ):
+                if model_entry.get(field) != _sha256(artifact_path):
+                    raise ValueError("nested model inventory artifact hash mismatch")
+            checkpoint_raw = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+            if not isinstance(checkpoint_raw, dict):
+                raise ValueError("nested model checkpoint is malformed")
+            checkpoint = cast(dict[str, Any], checkpoint_raw)
+            training_ids = checkpoint.get("real_training_crop_ids")
+            if (
+                checkpoint.get("held_out_fold") != scoring_fold
+                or checkpoint.get("excluded_folds") != list(excluded)
+                or checkpoint.get("fold_manifest_sha256") != _sha256(fold_manifest)
+                or not isinstance(training_ids, list)
+                or not all(isinstance(item, str) and item for item in training_ids)
+                or len(training_ids) != len(set(training_ids))
+            ):
+                raise ValueError("nested model checkpoint provenance mismatch")
+            metrics_raw = json.loads(metrics_path.read_text(encoding="utf-8"))
+            if not isinstance(metrics_raw, dict) or (
+                metrics_raw.get("held_out_fold") != scoring_fold
+                or metrics_raw.get("excluded_folds") != list(excluded)
+                or metrics_raw.get("checkpoint_sha256") != _sha256(checkpoint_path)
+                or metrics_raw.get("scores_sha256") != _sha256(scores_path)
+            ):
+                raise ValueError("nested model metrics provenance mismatch")
+            score_rows = cast(
+                list[dict[str, Any]],
+                pq.read_table(
+                    scores_path,
+                    columns=[
+                        "crop_id",
+                        "fold",
+                        "excluded_folds",
+                        "checkpoint_sha256",
+                        "fold_manifest_sha256",
+                    ],
+                ).to_pylist(),
+            )
+            scoring_ids = model_entry.get("scoring_crop_ids")
+            if not isinstance(scoring_ids, list) or {
+                row.get("crop_id") for row in score_rows
+            } != set(scoring_ids):
+                raise ValueError("nested model scores do not match inventory crop IDs")
+            if any(
+                row.get("fold") != scoring_fold
+                or row.get("excluded_folds") != list(excluded)
+                or row.get("checkpoint_sha256") != _sha256(checkpoint_path)
+                or row.get("fold_manifest_sha256") != _sha256(fold_manifest)
+                for row in score_rows
+            ):
+                raise ValueError("nested model score provenance mismatch")
+            model_key = (scoring_fold, excluded, _sha256(checkpoint_path))
+            if model_key in validated_models:
+                raise ValueError("nested model inventory has duplicate fold provenance")
+            validated_models.add(model_key)
+            scoring_ids_by_fold[scoring_fold] = set(cast(list[str], scoring_ids))
+            training_ids_by_fold[scoring_fold] = tuple(training_ids)
+            excluded_by_fold[scoring_fold] = excluded
+        if {fold for fold, _excluded, _hash in validated_models} != set(range(5)):
+            raise ValueError("nested model inventory requires scoring folds 0..4")
+        all_scoring_ids = set().union(*scoring_ids_by_fold.values())
+        for scoring_fold, training_ids in training_ids_by_fold.items():
+            forbidden = set().union(
+                *(scoring_ids_by_fold[fold] for fold in excluded_by_fold[scoring_fold])
+            )
+            if not set(training_ids).issubset(all_scoring_ids) or set(training_ids) & forbidden:
+                raise ValueError("nested model training includes an excluded-fold crop")
+        feature_rows = cast(
+            list[dict[str, Any]],
+            pq.read_table(
+                candidate,
+                columns=[
+                    "crop_id",
+                    "fold",
+                    "outer_fold",
+                    "excluded_folds",
+                    "checkpoint_sha256",
+                ],
+            ).to_pylist(),
+        )
+        if not feature_rows or any(
+            row.get("outer_fold") != outer_fold
+            or type(row.get("fold")) is not int
+            or not isinstance(row.get("excluded_folds"), list)
+            or (
+                row.get("fold"),
+                tuple(cast(list[int], row["excluded_folds"])),
+                row.get("checkpoint_sha256"),
+            )
+            not in validated_models
+            for row in feature_rows
+        ):
+            raise ValueError("nested feature rows are not bound to model inventory")
+        if outer_fold in resolved:
+            raise ValueError("nested feature manifest has duplicate outer fold")
+        resolved[outer_fold] = candidate
+    if set(resolved) != set(range(5)):
+        raise ValueError("nested feature manifest requires outer folds 0..4")
+    return resolved, _sha256(manifest)
+
+
+def _nested_feature_paths(config: MilOofConfig) -> tuple[dict[int, Path], str]:
+    """Resolve the required nested feature directory for MIL OOF."""
+    if config.feature_manifest is not None:
+        raise ValueError("MIL OOF rejects ordinary feature manifests; use nested feature directory")
+    if config.nested_feature_dir is None:
+        raise ValueError("MIL OOF requires a nested feature directory")
+    return validate_nested_feature_dir(
+        config.nested_feature_dir,
+        config.real_manifest,
+        config.fold_manifest,
+    )
+
+
 def train_mil_oof(config: MilOofConfig) -> MilOofArtifacts:
     """Train five MIL folds and atomically publish complete image-level OOF scores."""
     if config.output_dir.exists():
         raise ValueError(f"MIL OOF output directory already exists: {config.output_dir}")
-    for path in (config.real_manifest, config.fold_manifest, config.feature_manifest):
+    for path in (config.real_manifest, config.fold_manifest):
         if not path.is_file():
             raise ValueError(f"required manifest does not exist: {path}")
     expected, locked = _mil_oof_contract(config)
+    nested_features, nested_manifest_hash = _nested_feature_paths(config)
+    nested_root = cast(Path, config.nested_feature_dir).resolve()
     trusted_hashes = {
         "real_manifest_sha256": _sha256(config.real_manifest),
         "fold_manifest_sha256": _sha256(config.fold_manifest),
-        "feature_manifest_sha256": _sha256(config.feature_manifest),
+        "nested_manifest_sha256": nested_manifest_hash,
     }
     config.output_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = config.output_dir.with_name(f".{config.output_dir.name}.part-{os.getpid()}")
@@ -743,9 +1011,11 @@ def train_mil_oof(config: MilOofConfig) -> MilOofArtifacts:
                 MilTrainConfig(
                     real_manifest=config.real_manifest,
                     fold_manifest=config.fold_manifest,
-                    feature_manifest=config.feature_manifest,
+                    feature_manifest=nested_features[fold],
                     output_dir=staging / f"fold-{fold}",
                     held_out_fold=fold,
+                    outer_fold=fold,
+                    nested_manifest_sha256=nested_manifest_hash,
                     epochs=config.epochs,
                     max_steps=config.max_steps,
                     batch_size=config.batch_size,
@@ -775,7 +1045,11 @@ def train_mil_oof(config: MilOofConfig) -> MilOofArtifacts:
                 raise ValueError(f"MIL fold {fold} train IDs are malformed")
             if set(train_ids) & set(expected_ids) or set(train_ids) & locked:
                 raise ValueError(f"MIL fold {fold} training/scoring isolation failed")
-            for field, trusted in trusted_hashes.items():
+            per_fold_hashes = {
+                **trusted_hashes,
+                "feature_manifest_sha256": _sha256(nested_features[fold]),
+            }
+            for field, trusted in per_fold_hashes.items():
                 if checkpoint.get(field) != trusted:
                     raise ValueError(f"MIL fold {fold} checkpoint {field} mismatch")
 
@@ -792,7 +1066,7 @@ def train_mil_oof(config: MilOofConfig) -> MilOofArtifacts:
                     raise ValueError(f"MIL fold {fold} score label mismatch")
                 if row.get("checkpoint_sha256") != checkpoint_hash:
                     raise ValueError(f"MIL fold {fold} score checkpoint hash mismatch")
-                for field, trusted in trusted_hashes.items():
+                for field, trusted in per_fold_hashes.items():
                     if row.get(field) != trusted:
                         raise ValueError(f"MIL fold {fold} score {field} mismatch")
                 rows.append(row)
@@ -808,6 +1082,9 @@ def train_mil_oof(config: MilOofConfig) -> MilOofArtifacts:
                 or metrics_raw.get("validation_image_ids") != expected_ids
             ):
                 raise ValueError(f"MIL fold {fold} metrics provenance mismatch")
+            for field, trusted in per_fold_hashes.items():
+                if metrics_raw.get(field) != trusted:
+                    raise ValueError(f"MIL fold {fold} metrics {field} mismatch")
             inventory_folds.append(
                 {
                     "held_out_fold": fold,
@@ -818,6 +1095,10 @@ def train_mil_oof(config: MilOofConfig) -> MilOofArtifacts:
                     "scores": f"fold-{fold}/image-scores.parquet",
                     "scores_sha256": _sha256(artifact.image_scores),
                     "validation_image_ids": expected_ids,
+                    "nested_feature_manifest": str(
+                        nested_features[fold].resolve().relative_to(nested_root)
+                    ),
+                    "nested_feature_manifest_sha256": _sha256(nested_features[fold]),
                 }
             )
         rows.sort(key=lambda row: (int(row["fold"]), str(row["image_id"])))

@@ -63,11 +63,10 @@ def _config(tmp_path: Path) -> MilOofConfig:
             }
         ],
     )
-    features = _write(tmp_path / "features.parquet", [{"crop_id": "placeholder"}])
     return MilOofConfig(
         real_manifest=real,
         fold_manifest=folds,
-        feature_manifest=features,
+        nested_feature_dir=tmp_path / "nested-features",
         output_dir=tmp_path / "mil-oof",
         device="cpu",
         max_steps=1,
@@ -78,6 +77,15 @@ def test_mil_oof_runs_all_folds_and_atomically_collects_every_image(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(tmp_path)
+    feature = _write(
+        config.nested_feature_dir / "features.parquet", [{"crop_id": "placeholder"}]
+    )
+    nested_hash = "n" * 64
+    monkeypatch.setattr(
+        mil_module,
+        "_nested_feature_paths",
+        lambda _config: ({fold: feature for fold in range(5)}, nested_hash),
+    )
 
     def fake_train(fold_config: object) -> object:
         fold = fold_config.held_out_fold
@@ -92,7 +100,8 @@ def test_mil_oof_runs_all_folds_and_atomically_collects_every_image(
                 "train_image_ids": [f"image-{other}" for other in range(5) if other != fold],
                 "real_manifest_sha256": _sha(config.real_manifest),
                 "fold_manifest_sha256": _sha(config.fold_manifest),
-                "feature_manifest_sha256": _sha(config.feature_manifest),
+                "feature_manifest_sha256": _sha(fold_config.feature_manifest),
+                "nested_manifest_sha256": nested_hash,
             },
             checkpoint,
         )
@@ -109,7 +118,8 @@ def test_mil_oof_runs_all_folds_and_atomically_collects_every_image(
                     "checkpoint_sha256": _sha(checkpoint),
                     "real_manifest_sha256": _sha(config.real_manifest),
                     "fold_manifest_sha256": _sha(config.fold_manifest),
-                    "feature_manifest_sha256": _sha(config.feature_manifest),
+                    "feature_manifest_sha256": _sha(fold_config.feature_manifest),
+                    "nested_manifest_sha256": nested_hash,
                 }
             ],
         )
@@ -119,8 +129,12 @@ def test_mil_oof_runs_all_folds_and_atomically_collects_every_image(
                 {
                     "held_out_fold": fold,
                     "validation_image_ids": validation_ids,
-                    "checkpoint_sha256": _sha(checkpoint),
-                    "image_scores_sha256": _sha(score),
+                        "checkpoint_sha256": _sha(checkpoint),
+                        "image_scores_sha256": _sha(score),
+                        "real_manifest_sha256": _sha(config.real_manifest),
+                        "fold_manifest_sha256": _sha(config.fold_manifest),
+                        "feature_manifest_sha256": _sha(fold_config.feature_manifest),
+                        "nested_manifest_sha256": nested_hash,
                 }
             ),
             encoding="utf-8",
@@ -152,6 +166,14 @@ def test_mil_oof_failure_removes_whole_staging_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(tmp_path)
+    feature = _write(
+        config.nested_feature_dir / "features.parquet", [{"crop_id": "placeholder"}]
+    )
+    monkeypatch.setattr(
+        mil_module,
+        "_nested_feature_paths",
+        lambda _config: ({fold: feature for fold in range(5)}, "n" * 64),
+    )
     monkeypatch.setattr(
         mil_module,
         "train_mil_fold",
@@ -161,3 +183,18 @@ def test_mil_oof_failure_removes_whole_staging_root(
         train_mil_oof(config)
     assert not config.output_dir.exists()
     assert not list(tmp_path.glob(".mil-oof.part-*"))
+
+
+def test_mil_oof_rejects_ordinary_single_layer_character_oof(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config = config.model_copy(
+        update={"feature_manifest": tmp_path / "single-layer.parquet", "nested_feature_dir": None}
+    )
+    _write(config.feature_manifest, [{"crop_id": "placeholder"}])
+
+    with pytest.raises(ValueError, match="nested feature"):
+        train_mil_oof(config)
+
+    assert not config.output_dir.exists()

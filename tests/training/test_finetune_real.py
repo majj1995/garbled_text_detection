@@ -231,6 +231,19 @@ def test_finetune_projects_sensitive_columns_only_after_locked_row_filter(
     finetune_real_fold(config, held_out_fold=0)
 
 
+def test_finetune_can_exclude_an_additional_outer_fold_from_real_training(
+    tmp_path: Path,
+) -> None:
+    config = _inputs(tmp_path)
+
+    inputs = finetune_module._validated_inputs(
+        config, held_out_fold=0, additionally_excluded_fold=1
+    )
+
+    assert inputs.scoring[0].image_id == "held-image"
+    assert inputs.training == ()
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [

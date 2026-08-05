@@ -25,6 +25,7 @@ from poor_word.evaluation.metrics import base_rate_precision
 from poor_word.glyphs.catalog import load_common_chars
 from poor_word.ocr.types import OcrAudit
 from poor_word.real_data.schema import ImageLabel, SplitRole
+from poor_word.training.train_mil import validate_nested_feature_dir
 
 
 class RealSeedReportConfig(BaseModel):
@@ -46,6 +47,7 @@ class RealSeedReportConfig(BaseModel):
     character_model_inventory: Path
     image_model_inventory: Path
     output_dir: Path
+    nested_character_manifest: Path | None = None
     additional_source_artifacts: dict[str, Path] = Field(default_factory=dict)
     model_artifacts: dict[str, Path] = Field(default_factory=dict)
     prevalence: float = Field(default=0.001, gt=0.0, lt=1.0)
@@ -476,8 +478,11 @@ def _load_image_rows(
     trusted_hashes = {
         "real_manifest_sha256": _sha256(config.real_manifest),
         "fold_manifest_sha256": _sha256(config.fold_manifest),
-        "feature_manifest_sha256": _sha256(config.character_oof),
     }
+    if config.nested_character_manifest is None:
+        trusted_hashes["feature_manifest_sha256"] = _sha256(config.character_oof)
+    else:
+        trusted_hashes["nested_manifest_sha256"] = _sha256(config.nested_character_manifest)
     for row in rows:
         image_id = _required_text(row, "image_id", "image OOF")
         if image_id in by_id:
@@ -523,6 +528,11 @@ def _input_hashes(config: RealSeedReportConfig) -> dict[str, str]:
         "dependency_lock": config.dependency_lock,
         "character_model_inventory": config.character_model_inventory,
         "image_model_inventory": config.image_model_inventory,
+        **(
+            {"nested_character_manifest": config.nested_character_manifest}
+            if config.nested_character_manifest is not None
+            else {}
+        ),
         **{f"source:{name}": path for name, path in config.additional_source_artifacts.items()},
         **{f"model:{name}": path for name, path in config.model_artifacts.items()},
     }
@@ -547,6 +557,29 @@ def _inventory_path(root: Path, value: object, field: str) -> Path:
     return resolved
 
 
+def _validate_nested_character_manifest(
+    path: Path,
+    *,
+    real_manifest: Path,
+    fold_manifest: Path,
+) -> tuple[str, dict[int, tuple[str, str]]]:
+    """Bind the report to actual outer-fold-aware models and feature files."""
+    expected_path = path.parent / "nested-manifest.json"
+    if path.resolve() != expected_path.resolve():
+        raise ValueError("nested character manifest must be named nested-manifest.json")
+    resolved, manifest_hash = validate_nested_feature_dir(
+        path.parent,
+        real_manifest,
+        fold_manifest,
+    )
+    root = path.parent.resolve()
+    features = {
+        fold: (str(feature.resolve().relative_to(root)), _sha256(feature))
+        for fold, feature in resolved.items()
+    }
+    return manifest_hash, features
+
+
 def _validate_model_inventory(
     inventory_path: Path,
     rows: list[dict[str, Any]],
@@ -555,6 +588,8 @@ def _validate_model_inventory(
     id_field: str,
     score_name: str,
     trusted_hashes: dict[str, str],
+    nested_features: dict[int, tuple[str, str]] | None = None,
+    nested_manifest_hash: str | None = None,
 ) -> dict[str, str]:
     payload = json.loads(inventory_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or payload.get("kind") != kind:
@@ -621,6 +656,17 @@ def _validate_model_inventory(
         for field, expected_hash in trusted_hashes.items():
             if checkpoint.get(field) != expected_hash:
                 raise ValueError(f"{kind} checkpoint {field} mismatch")
+        if nested_features is not None:
+            expected_feature = nested_features.get(fold)
+            if expected_feature is None or nested_manifest_hash is None:
+                raise ValueError("image OOF nested feature contract is incomplete")
+            if (
+                entry.get("nested_feature_manifest") != expected_feature[0]
+                or entry.get("nested_feature_manifest_sha256") != expected_feature[1]
+                or checkpoint.get("feature_manifest_sha256") != expected_feature[1]
+                or checkpoint.get("nested_manifest_sha256") != nested_manifest_hash
+            ):
+                raise ValueError("image OOF inventory nested feature provenance mismatch")
         metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
         if not isinstance(metrics, dict):
             raise ValueError(f"{kind} metrics are malformed")
@@ -633,6 +679,13 @@ def _validate_model_inventory(
             or metrics.get(metrics_ids) != expected_ids
         ):
             raise ValueError(f"{kind} metrics provenance mismatch")
+        if nested_features is not None:
+            expected_feature = nested_features[fold]
+            if (
+                metrics.get("feature_manifest_sha256") != expected_feature[1]
+                or metrics.get("nested_manifest_sha256") != nested_manifest_hash
+            ):
+                raise ValueError("image OOF metrics nested feature provenance mismatch")
         fold_rows = cast(list[dict[str, Any]], pq.read_table(scores_path).to_pylist())
         actual_by_id = {str(row[id_field]): row for row in fold_rows}
         if len(actual_by_id) != len(fold_rows) or set(actual_by_id) != set(expected_ids):
@@ -645,6 +698,11 @@ def _validate_model_inventory(
             for field in (id_field, "image_id", "fold", score_name, "checkpoint_sha256"):
                 if actual_row.get(field) != merged.get(field):
                     raise ValueError(f"{kind} merged/fold score {field} mismatch")
+            if nested_features is not None and (
+                actual_row.get("feature_manifest_sha256") != nested_features[fold][1]
+                or actual_row.get("nested_manifest_sha256") != nested_manifest_hash
+            ):
+                raise ValueError("image OOF score nested feature provenance mismatch")
         model_hashes[f"fold-{fold}"] = checkpoint_hash
     if seen != set(expected_by_fold):
         raise ValueError(f"{kind} model inventory is missing folds")
@@ -656,8 +714,9 @@ def _l20_commands() -> list[str]:
         "uv run poor-word ocr audit --endpoint http://127.0.0.1:8765 --image-dir data/real/seed/images --warmup 10 --runs 30 --output artifacts/ocr-audit-l20.json  # PP-OCRv5_server_det + PP-OCRv5_server_rec",
         "uv run poor-word train adapt-real --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet --real-manifest data/real/versioned/seed-v1/manifest.parquet --prior-checkpoint artifacts/glyph-mvp-v1/encoder.pt --output-dir artifacts/glyph-real-adapt-v1 --device cuda --epochs 20 --batch-size 64",
         "uv run poor-word train real-oof --real-manifest data/real/versioned/seed-v1/manifest.parquet --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet --gold-manifest data/real/versioned/seed-v1/gold-v1/gold-crops.parquet --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet --synthetic-manifest data/generated/mvp-v1/manifest.parquet --adapted-checkpoint artifacts/glyph-real-adapt-v1/encoder.pt --output-dir artifacts/real-oof-v1 --device cuda --epochs 10 --batch-size 64",
-        "uv run poor-word train mil-oof --real-manifest data/real/versioned/seed-v1/manifest.parquet --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet --feature-manifest artifacts/real-oof-v1/oof/oof.parquet --output-dir artifacts/mil-oof-v1 --device cuda --epochs 30 --batch-size 32",
-        "uv run poor-word evaluate real-seed --real-manifest data/real/versioned/seed-v1/manifest.parquet --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet --gold-manifest data/real/versioned/seed-v1/gold-v1/gold-crops.parquet --character-oof artifacts/real-oof-v1/oof/oof.parquet --image-oof artifacts/mil-oof-v1/image-oof.parquet --ocr-manifest artifacts/ocr-character-scores.parquet --ocr-audit artifacts/ocr-audit-l20.json --common-chars data/raw/common_chars_3500.txt --source-lock data/locks/common_chars_3500.lock.json --dependency-lock uv.lock --character-inventory artifacts/real-oof-v1/model-inventory.json --image-inventory artifacts/mil-oof-v1/model-inventory.json --prevalence 0.001 --output-dir artifacts/real-seed-report-v1",
+        "uv run poor-word train real-nested-oof --real-manifest data/real/versioned/seed-v1/manifest.parquet --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet --gold-manifest data/real/versioned/seed-v1/gold-v1/gold-crops.parquet --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet --synthetic-manifest data/generated/mvp-v1/manifest.parquet --adapted-checkpoint artifacts/glyph-real-adapt-v1/encoder.pt --output-dir artifacts/real-nested-oof-v1 --device cuda --epochs 10 --batch-size 64",
+        "uv run poor-word train mil-oof --real-manifest data/real/versioned/seed-v1/manifest.parquet --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet --nested-feature-dir artifacts/real-nested-oof-v1 --output-dir artifacts/mil-oof-v1 --device cuda --epochs 30 --batch-size 32",
+        "uv run poor-word evaluate real-seed --real-manifest data/real/versioned/seed-v1/manifest.parquet --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet --gold-manifest data/real/versioned/seed-v1/gold-v1/gold-crops.parquet --character-oof artifacts/real-oof-v1/oof/oof.parquet --image-oof artifacts/mil-oof-v1/image-oof.parquet --ocr-manifest artifacts/ocr-character-scores.parquet --ocr-audit artifacts/ocr-audit-l20.json --common-chars data/raw/common_chars_3500.txt --source-lock data/locks/common_chars_3500.lock.json --dependency-lock uv.lock --character-inventory artifacts/real-oof-v1/model-inventory.json --image-inventory artifacts/mil-oof-v1/model-inventory.json --nested-manifest artifacts/real-nested-oof-v1/nested-manifest.json --prevalence 0.001 --output-dir artifacts/real-seed-report-v1",
     ]
 
 
@@ -717,6 +776,14 @@ def evaluate_real_seed(config: RealSeedReportConfig) -> RealSeedReportArtifacts:
         raise ValueError("fold manifest does not cover real manifest IDs")
     character_rows, ocr_rows = _load_character_rows(config, folds, set(locked_ids))
     image_rows = _load_image_rows(config, eligible, folds, set(locked_ids))
+    nested_manifest_hash: str | None = None
+    nested_features: dict[int, tuple[str, str]] | None = None
+    if config.nested_character_manifest is not None:
+        nested_manifest_hash, nested_features = _validate_nested_character_manifest(
+            config.nested_character_manifest,
+            real_manifest=config.real_manifest,
+            fold_manifest=config.fold_manifest,
+        )
     character_model_hashes = _validate_model_inventory(
         config.character_model_inventory,
         character_rows,
@@ -739,8 +806,9 @@ def evaluate_real_seed(config: RealSeedReportConfig) -> RealSeedReportArtifacts:
         trusted_hashes={
             "real_manifest_sha256": _sha256(config.real_manifest),
             "fold_manifest_sha256": _sha256(config.fold_manifest),
-            "feature_manifest_sha256": _sha256(config.character_oof),
         },
+        nested_features=nested_features,
+        nested_manifest_hash=nested_manifest_hash,
     )
     common_chars = frozenset(load_common_chars(config.common_chars, expected_count=3500))
     source_lock = load_source_lock(config.source_lock)

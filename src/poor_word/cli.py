@@ -30,6 +30,7 @@ from poor_word.real_data.review import (
 from poor_word.real_data.split import assign_group_folds
 from poor_word.training.adapt_real import AdaptConfig, adapt_real_encoder
 from poor_word.training.finetune_real import RealFineTuneConfig, finetune_real_fold
+from poor_word.training.nested_oof import NestedOofConfig, train_nested_real_oof
 from poor_word.training.train_glyph import TrainConfig, train_glyph
 from poor_word.training.train_mil import MilOofConfig, MilTrainConfig, train_mil_fold, train_mil_oof
 
@@ -323,6 +324,43 @@ def train_real_oof_command(
     typer.echo(f"metrics={oof.parent / 'metrics.json'}")
 
 
+@train_app.command("real-nested-oof")
+def train_real_nested_oof_command(
+    real_manifest: Annotated[Path, typer.Option("--real-manifest")],
+    crop_manifest: Annotated[Path, typer.Option("--crop-manifest")],
+    gold_manifest: Annotated[Path, typer.Option("--gold-manifest")],
+    fold_manifest: Annotated[Path, typer.Option("--fold-manifest")],
+    synthetic_manifest: Annotated[Path, typer.Option("--synthetic-manifest")],
+    adapted_checkpoint: Annotated[Path, typer.Option("--adapted-checkpoint")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    epochs: Annotated[int, typer.Option("--epochs", min=1)] = 10,
+    max_steps: Annotated[int | None, typer.Option("--max-steps", min=1)] = None,
+    batch_size: Annotated[int, typer.Option("--batch-size", min=2)] = 64,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
+    device: Annotated[str, typer.Option("--device")] = "cuda",
+    learning_rate: Annotated[float, typer.Option("--learning-rate", min=0.0000001)] = 1e-4,
+) -> None:
+    """Publish nested character features for leakage-safe five-fold MIL OOF."""
+    artifacts = train_nested_real_oof(
+        NestedOofConfig(
+            real_manifest=real_manifest,
+            crop_manifest=crop_manifest,
+            gold_manifest=gold_manifest,
+            fold_manifest=fold_manifest,
+            synthetic_manifest=synthetic_manifest,
+            adapted_checkpoint=adapted_checkpoint,
+            output_dir=output_dir,
+            epochs=epochs,
+            max_steps=max_steps,
+            batch_size=batch_size,
+            seed=seed,
+            device=device,
+            learning_rate=learning_rate,
+        )
+    )
+    typer.echo(f"nested_manifest={artifacts.manifest}")
+
+
 @train_app.command("mil")
 def train_mil_command(
     real_manifest: Annotated[Path, typer.Option("--real-manifest")],
@@ -373,7 +411,7 @@ def train_mil_command(
 def train_mil_oof_command(
     real_manifest: Annotated[Path, typer.Option("--real-manifest")],
     fold_manifest: Annotated[Path, typer.Option("--fold-manifest")],
-    feature_manifest: Annotated[Path, typer.Option("--feature-manifest")],
+    nested_feature_dir: Annotated[Path, typer.Option("--nested-feature-dir")],
     output_dir: Annotated[Path, typer.Option("--output-dir")],
     epochs: Annotated[int, typer.Option("--epochs", min=1)] = 30,
     max_steps: Annotated[int | None, typer.Option("--max-steps", min=1)] = None,
@@ -382,12 +420,12 @@ def train_mil_oof_command(
     seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
     device: Annotated[str, typer.Option("--device")] = "cuda",
 ) -> None:
-    """Train and atomically collect all five image-level MIL OOF folds."""
+    """Train MIL OOF from outer-fold-aware nested character features only."""
     artifacts = train_mil_oof(
         MilOofConfig(
             real_manifest=real_manifest,
             fold_manifest=fold_manifest,
-            feature_manifest=feature_manifest,
+            nested_feature_dir=nested_feature_dir,
             output_dir=output_dir,
             epochs=epochs,
             max_steps=max_steps,
@@ -441,6 +479,7 @@ def evaluate_real_seed_command(
     dependency_lock: Annotated[Path, typer.Option("--dependency-lock")],
     character_model_inventory: Annotated[Path, typer.Option("--character-inventory")],
     image_model_inventory: Annotated[Path, typer.Option("--image-inventory")],
+    nested_character_manifest: Annotated[Path, typer.Option("--nested-manifest")],
     output_dir: Annotated[Path, typer.Option("--output-dir")],
     prevalence: Annotated[float, typer.Option("--prevalence", min=0.000001, max=0.999999)] = 0.001,
     threshold: Annotated[float, typer.Option("--threshold", min=0, max=1)] = 0.5,
@@ -461,6 +500,7 @@ def evaluate_real_seed_command(
             dependency_lock=dependency_lock,
             character_model_inventory=character_model_inventory,
             image_model_inventory=image_model_inventory,
+            nested_character_manifest=nested_character_manifest,
             output_dir=output_dir,
             prevalence=prevalence,
             threshold=threshold,

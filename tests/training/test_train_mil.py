@@ -7,6 +7,7 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 import torch
 
+import poor_word.training.train_mil as mil_module
 from poor_word.training.train_mil import MilTrainConfig, compute_mil_loss, train_mil_fold
 
 
@@ -238,6 +239,39 @@ def test_training_rejects_untrusted_feature_linkage_before_output(
     with pytest.raises(ValueError, match=match):
         train_mil_fold(config)
     assert not config.output_dir.exists()
+
+
+def test_training_rejects_locked_feature_from_identity_projection_before_sensitive_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _inputs(tmp_path)
+    rows = pq.read_table(config.feature_manifest).to_pylist()
+    rows.append(
+        {
+            **rows[0],
+            "crop_id": "locked-sensitive",
+            "image_id": "locked",
+            "fold": -1,
+            "decision": "LOCKED_LABEL_MUST_NOT_BE_READ",
+            "anomaly_kind": "LOCKED_LABEL_MUST_NOT_BE_READ",
+        }
+    )
+    _write(config.feature_manifest, rows)
+    original = pq.read_table
+    requested: list[tuple[str, ...]] = []
+
+    def guarded_read(path: object, *args: object, **kwargs: object) -> object:
+        columns = kwargs.get("columns")
+        if Path(path) == config.feature_manifest and isinstance(columns, list):
+            requested.append(tuple(columns))
+            assert "decision" not in columns
+            assert "anomaly_kind" not in columns
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(mil_module.pq, "read_table", guarded_read)
+    with pytest.raises(ValueError, match="locked-test feature"):
+        train_mil_fold(config)
+    assert requested == [("crop_id", "image_id")]
 
 
 def test_missing_feature_rows_form_zero_character_bag(tmp_path: Path) -> None:
