@@ -354,6 +354,100 @@ def _trusted_fixture(tmp_path: Path) -> RealSeedReportConfig:
         encoding="utf-8",
     )
 
+    nested_root = tmp_path / "nested-models"
+    nested_entries: list[dict[str, object]] = []
+    for outer_fold in (0, 1):
+        feature_rows: list[dict[str, object]] = []
+        model_entries: list[dict[str, object]] = []
+        for scoring_fold in (0, 1):
+            excluded = sorted({outer_fold, scoring_fold})
+            directory = nested_root / f"outer-fold-{outer_fold}" / f"character-fold-{scoring_fold}"
+            directory.mkdir(parents=True)
+            scoring_specs = [item for item in char_specs if item[3] == scoring_fold]
+            scoring_ids = sorted(item[0] for item in scoring_specs)
+            checkpoint = directory / "model.pt"
+            torch.save(
+                {
+                    "held_out_fold": scoring_fold,
+                    "excluded_folds": excluded,
+                    "scoring_crop_ids": scoring_ids,
+                    "real_training_crop_ids": sorted(
+                        item[0]
+                        for item in char_specs
+                        if item[3] not in excluded and item[4] in {"PASS", "BLOCK"}
+                    ),
+                    "fold_manifest_sha256": _sha(folds),
+                },
+                checkpoint,
+            )
+            checkpoint_hash = _sha(checkpoint)
+            score_rows = [
+                {
+                    "crop_id": crop_id,
+                    "image_id": image_id,
+                    "fold": row_fold,
+                    "risk_score": risk,
+                    "model_id": f"real-fold-{scoring_fold}",
+                    "checkpoint_sha256": checkpoint_hash,
+                    "fold_manifest_sha256": _sha(folds),
+                    "excluded_folds": excluded,
+                }
+                for crop_id, image_id, _path, row_fold, _decision, _kind, risk in scoring_specs
+            ]
+            scores = _write(directory / "scores.parquet", score_rows)
+            metrics = directory / "metrics.json"
+            metrics.write_text(
+                json.dumps(
+                    {
+                        "held_out_fold": scoring_fold,
+                        "excluded_folds": excluded,
+                        "checkpoint_sha256": checkpoint_hash,
+                        "scores_sha256": _sha(scores),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            feature_rows.extend({**row, "outer_fold": outer_fold} for row in score_rows)
+            prefix = f"outer-fold-{outer_fold}/character-fold-{scoring_fold}"
+            model_entries.append(
+                {
+                    "scoring_fold": scoring_fold,
+                    "excluded_folds": excluded,
+                    "checkpoint": f"{prefix}/model.pt",
+                    "checkpoint_sha256": checkpoint_hash,
+                    "metrics": f"{prefix}/metrics.json",
+                    "metrics_sha256": _sha(metrics),
+                    "scores": f"{prefix}/scores.parquet",
+                    "scores_sha256": _sha(scores),
+                    "scoring_crop_ids": scoring_ids,
+                }
+            )
+        features = _write(
+            nested_root / f"outer-fold-{outer_fold}" / "features.parquet",
+            feature_rows,
+        )
+        nested_entries.append(
+            {
+                "outer_fold": outer_fold,
+                "features": f"outer-fold-{outer_fold}/features.parquet",
+                "features_sha256": _sha(features),
+                "models": model_entries,
+            }
+        )
+    nested_manifest = nested_root / "nested-manifest.json"
+    nested_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "nested_character_oof",
+                "real_manifest_sha256": _sha(real),
+                "fold_manifest_sha256": _sha(folds),
+                "outer_folds": nested_entries,
+            }
+        ),
+        encoding="utf-8",
+    )
+
     image_specs = [
         ("normal", 0, "NORMAL", 0.1, False),
         ("zero", 0, "NORMAL", 0.2, True),
@@ -362,15 +456,18 @@ def _trusted_fixture(tmp_path: Path) -> RealSeedReportConfig:
     image_rows: list[dict[str, object]] = []
     image_root = tmp_path / "image-models"
     image_inventory_rows: list[dict[str, object]] = []
-    image_hashes = {
-        "real_manifest_sha256": _sha(real),
-        "fold_manifest_sha256": _sha(folds),
-        "feature_manifest_sha256": _sha(char_oof),
-    }
     for fold in (0, 1):
         directory = image_root / f"fold-{fold}"
         directory.mkdir(parents=True)
         ids = sorted(item[0] for item in image_specs if item[1] == fold)
+        feature_entry = nested_entries[fold]
+        feature_hash = str(feature_entry["features_sha256"])
+        image_hashes = {
+            "real_manifest_sha256": _sha(real),
+            "fold_manifest_sha256": _sha(folds),
+            "feature_manifest_sha256": feature_hash,
+            "nested_manifest_sha256": _sha(nested_manifest),
+        }
         checkpoint = directory / "model.pt"
         torch.save(
             {
@@ -406,6 +503,7 @@ def _trusted_fixture(tmp_path: Path) -> RealSeedReportConfig:
                     "checkpoint_sha256": checkpoint_hash,
                     "image_scores_sha256": _sha(scores),
                     "validation_image_ids": ids,
+                    **image_hashes,
                 }
             ),
             encoding="utf-8",
@@ -419,6 +517,8 @@ def _trusted_fixture(tmp_path: Path) -> RealSeedReportConfig:
                 "metrics_sha256": _sha(metrics),
                 "scores": f"fold-{fold}/image-scores.parquet",
                 "scores_sha256": _sha(scores),
+                "nested_feature_manifest": feature_entry["features"],
+                "nested_feature_manifest_sha256": feature_hash,
             }
         )
     image_oof = _write(tmp_path / "image-oof.parquet", image_rows)
@@ -509,6 +609,7 @@ def _trusted_fixture(tmp_path: Path) -> RealSeedReportConfig:
         dependency_lock=dependency_lock,
         character_model_inventory=character_inventory,
         image_model_inventory=image_inventory,
+        nested_character_manifest=nested_manifest,
         output_dir=tmp_path / "report",
         prevalence=0.001,
         threshold=0.5,
@@ -516,6 +617,14 @@ def _trusted_fixture(tmp_path: Path) -> RealSeedReportConfig:
 
 
 _fixture = _trusted_fixture
+
+
+def test_report_config_requires_nested_character_provenance(tmp_path: Path) -> None:
+    config = _fixture(tmp_path)
+    payload = config.model_dump(exclude={"nested_character_manifest"})
+
+    with pytest.raises(ValueError, match="nested_character_manifest"):
+        RealSeedReportConfig.model_validate(payload)
 
 
 def test_report_compares_identical_oof_rows_and_is_explicitly_inconclusive(

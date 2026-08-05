@@ -46,8 +46,8 @@ class RealSeedReportConfig(BaseModel):
     dependency_lock: Path
     character_model_inventory: Path
     image_model_inventory: Path
+    nested_character_manifest: Path
     output_dir: Path
-    nested_character_manifest: Path | None = None
     additional_source_artifacts: dict[str, Path] = Field(default_factory=dict)
     model_artifacts: dict[str, Path] = Field(default_factory=dict)
     prevalence: float = Field(default=0.001, gt=0.0, lt=1.0)
@@ -478,11 +478,8 @@ def _load_image_rows(
     trusted_hashes = {
         "real_manifest_sha256": _sha256(config.real_manifest),
         "fold_manifest_sha256": _sha256(config.fold_manifest),
+        "nested_manifest_sha256": _sha256(config.nested_character_manifest),
     }
-    if config.nested_character_manifest is None:
-        trusted_hashes["feature_manifest_sha256"] = _sha256(config.character_oof)
-    else:
-        trusted_hashes["nested_manifest_sha256"] = _sha256(config.nested_character_manifest)
     for row in rows:
         image_id = _required_text(row, "image_id", "image OOF")
         if image_id in by_id:
@@ -528,11 +525,7 @@ def _input_hashes(config: RealSeedReportConfig) -> dict[str, str]:
         "dependency_lock": config.dependency_lock,
         "character_model_inventory": config.character_model_inventory,
         "image_model_inventory": config.image_model_inventory,
-        **(
-            {"nested_character_manifest": config.nested_character_manifest}
-            if config.nested_character_manifest is not None
-            else {}
-        ),
+        "nested_character_manifest": config.nested_character_manifest,
         **{f"source:{name}": path for name, path in config.additional_source_artifacts.items()},
         **{f"model:{name}": path for name, path in config.model_artifacts.items()},
     }
@@ -776,14 +769,11 @@ def evaluate_real_seed(config: RealSeedReportConfig) -> RealSeedReportArtifacts:
         raise ValueError("fold manifest does not cover real manifest IDs")
     character_rows, ocr_rows = _load_character_rows(config, folds, set(locked_ids))
     image_rows = _load_image_rows(config, eligible, folds, set(locked_ids))
-    nested_manifest_hash: str | None = None
-    nested_features: dict[int, tuple[str, str]] | None = None
-    if config.nested_character_manifest is not None:
-        nested_manifest_hash, nested_features = _validate_nested_character_manifest(
-            config.nested_character_manifest,
-            real_manifest=config.real_manifest,
-            fold_manifest=config.fold_manifest,
-        )
+    nested_manifest_hash, nested_features = _validate_nested_character_manifest(
+        config.nested_character_manifest,
+        real_manifest=config.real_manifest,
+        fold_manifest=config.fold_manifest,
+    )
     character_model_hashes = _validate_model_inventory(
         config.character_model_inventory,
         character_rows,

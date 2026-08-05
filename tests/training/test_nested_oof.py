@@ -151,3 +151,20 @@ def test_nested_oof_binds_each_outer_feature_to_actual_training_membership(
     )
     assert set(resolved) == set(range(5))
     assert manifest_hash == _sha(artifacts.manifest)
+
+    first_entry = manifest["outer_folds"][0]
+    feature_path = config.output_dir / first_entry["features"]
+    tampered = pq.read_table(feature_path).to_pylist()
+    tampered[0]["risk_score"] = 0.123456
+    _write(feature_path, tampered)
+    first_entry["features_sha256"] = _sha(feature_path)
+    artifacts.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="exactly match model scores"):
+        _nested_feature_paths(
+            MilOofConfig(
+                real_manifest=config.real_manifest,
+                fold_manifest=config.fold_manifest,
+                nested_feature_dir=config.output_dir,
+                output_dir=tmp_path / "tampered-mil-oof",
+            )
+        )

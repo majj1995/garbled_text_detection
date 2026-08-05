@@ -810,6 +810,19 @@ def validate_nested_feature_dir(
         raise ValueError("nested feature manifest has malformed outer_folds")
     resolved: dict[int, Path] = {}
     root = nested_feature_dir.resolve()
+    fold_rows = cast(
+        list[dict[str, Any]],
+        pq.read_table(fold_manifest, columns=["fold", "split_role"]).to_pylist(),
+    )
+    development_folds = {
+        cast(int, row["fold"])
+        for row in fold_rows
+        if row.get("split_role") != SplitRole.LOCKED_TEST.value
+        and type(row.get("fold")) is int
+        and cast(int, row["fold"]) >= 0
+    }
+    if not development_folds:
+        raise ValueError("nested feature validation requires development folds")
 
     def inventory_path(entry: dict[str, Any], field: str) -> Path:
         relative = entry.get(field)
@@ -845,6 +858,7 @@ def validate_nested_feature_dir(
         if not isinstance(models, list):
             raise ValueError("nested feature manifest has malformed model inventory")
         validated_models: set[tuple[int, tuple[int, ...], str]] = set()
+        scores_by_model: dict[tuple[int, tuple[int, ...], str], dict[str, dict[str, Any]]] = {}
         scoring_ids_by_fold: dict[int, set[str]] = {}
         training_ids_by_fold: dict[int, tuple[str, ...]] = {}
         excluded_by_fold: dict[int, tuple[int, ...]] = {}
@@ -900,7 +914,10 @@ def validate_nested_feature_dir(
                     scores_path,
                     columns=[
                         "crop_id",
+                        "image_id",
                         "fold",
+                        "risk_score",
+                        "model_id",
                         "excluded_folds",
                         "checkpoint_sha256",
                         "fold_manifest_sha256",
@@ -924,11 +941,15 @@ def validate_nested_feature_dir(
             if model_key in validated_models:
                 raise ValueError("nested model inventory has duplicate fold provenance")
             validated_models.add(model_key)
+            by_crop = {str(row.get("crop_id")): row for row in score_rows}
+            if len(by_crop) != len(score_rows):
+                raise ValueError("nested model scores contain duplicate crop IDs")
+            scores_by_model[model_key] = by_crop
             scoring_ids_by_fold[scoring_fold] = set(cast(list[str], scoring_ids))
             training_ids_by_fold[scoring_fold] = tuple(training_ids)
             excluded_by_fold[scoring_fold] = excluded
-        if {fold for fold, _excluded, _hash in validated_models} != set(range(5)):
-            raise ValueError("nested model inventory requires scoring folds 0..4")
+        if {fold for fold, _excluded, _hash in validated_models} != development_folds:
+            raise ValueError("nested model inventory does not cover development folds")
         all_scoring_ids = set().union(*scoring_ids_by_fold.values())
         for scoring_fold, training_ids in training_ids_by_fold.items():
             forbidden = set().union(
@@ -942,31 +963,68 @@ def validate_nested_feature_dir(
                 candidate,
                 columns=[
                     "crop_id",
+                    "image_id",
                     "fold",
                     "outer_fold",
+                    "risk_score",
+                    "model_id",
                     "excluded_folds",
                     "checkpoint_sha256",
                 ],
             ).to_pylist(),
         )
-        if not feature_rows or any(
-            row.get("outer_fold") != outer_fold
-            or type(row.get("fold")) is not int
-            or not isinstance(row.get("excluded_folds"), list)
-            or (
-                row.get("fold"),
-                tuple(cast(list[int], row["excluded_folds"])),
-                row.get("checkpoint_sha256"),
+        feature_ids_by_model: dict[tuple[int, tuple[int, ...], str], set[str]] = defaultdict(
+            set
+        )
+        for row in feature_rows:
+            raw_excluded = row.get("excluded_folds")
+            feature_fold = row.get("fold")
+            checkpoint_hash = row.get("checkpoint_sha256")
+            crop_id = row.get("crop_id")
+            if (
+                type(feature_fold) is not int
+                or not isinstance(raw_excluded, list)
+                or not all(type(value) is int for value in raw_excluded)
+                or not isinstance(checkpoint_hash, str)
+                or not isinstance(crop_id, str)
+            ):
+                raise ValueError("nested feature rows have malformed provenance")
+            model_key = (
+                feature_fold,
+                tuple(cast(list[int], raw_excluded)),
+                checkpoint_hash,
             )
-            not in validated_models
-            for row in feature_rows
+            expected_score = scores_by_model.get(model_key, {}).get(crop_id)
+            if (
+                row.get("outer_fold") != outer_fold
+                or model_key not in validated_models
+                or crop_id in feature_ids_by_model[model_key]
+                or expected_score is None
+                or any(
+                    row.get(field) != expected_score.get(field)
+                    for field in (
+                        "crop_id",
+                        "image_id",
+                        "fold",
+                        "risk_score",
+                        "model_id",
+                        "excluded_folds",
+                        "checkpoint_sha256",
+                    )
+                )
+            ):
+                raise ValueError("nested feature rows do not exactly match model scores")
+            feature_ids_by_model[model_key].add(crop_id)
+        if set(feature_ids_by_model) != validated_models or any(
+            crop_ids != set(scores_by_model[model_key])
+            for model_key, crop_ids in feature_ids_by_model.items()
         ):
-            raise ValueError("nested feature rows are not bound to model inventory")
+            raise ValueError("nested feature coverage does not exactly match model scores")
         if outer_fold in resolved:
             raise ValueError("nested feature manifest has duplicate outer fold")
         resolved[outer_fold] = candidate
-    if set(resolved) != set(range(5)):
-        raise ValueError("nested feature manifest requires outer folds 0..4")
+    if set(resolved) != development_folds:
+        raise ValueError("nested feature manifest does not cover development folds")
     return resolved, _sha256(manifest)
 
 
@@ -976,11 +1034,14 @@ def _nested_feature_paths(config: MilOofConfig) -> tuple[dict[int, Path], str]:
         raise ValueError("MIL OOF rejects ordinary feature manifests; use nested feature directory")
     if config.nested_feature_dir is None:
         raise ValueError("MIL OOF requires a nested feature directory")
-    return validate_nested_feature_dir(
+    resolved, manifest_hash = validate_nested_feature_dir(
         config.nested_feature_dir,
         config.real_manifest,
         config.fold_manifest,
     )
+    if set(resolved) != set(range(5)):
+        raise ValueError("MIL OOF requires nested development folds 0..4")
+    return resolved, manifest_hash
 
 
 def train_mil_oof(config: MilOofConfig) -> MilOofArtifacts:
