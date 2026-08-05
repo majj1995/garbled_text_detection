@@ -31,7 +31,7 @@ from poor_word.real_data.split import assign_group_folds
 from poor_word.training.adapt_real import AdaptConfig, adapt_real_encoder
 from poor_word.training.finetune_real import RealFineTuneConfig, finetune_real_fold
 from poor_word.training.train_glyph import TrainConfig, train_glyph
-from poor_word.training.train_mil import MilTrainConfig, train_mil_fold
+from poor_word.training.train_mil import MilOofConfig, MilTrainConfig, train_mil_fold, train_mil_oof
 
 app = typer.Typer(no_args_is_help=True)
 data_app = typer.Typer(no_args_is_help=True)
@@ -369,6 +369,39 @@ def train_mil_command(
     typer.echo(f"image_scores={artifacts.image_scores}")
 
 
+@train_app.command("mil-oof")
+def train_mil_oof_command(
+    real_manifest: Annotated[Path, typer.Option("--real-manifest")],
+    fold_manifest: Annotated[Path, typer.Option("--fold-manifest")],
+    feature_manifest: Annotated[Path, typer.Option("--feature-manifest")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    epochs: Annotated[int, typer.Option("--epochs", min=1)] = 30,
+    max_steps: Annotated[int | None, typer.Option("--max-steps", min=1)] = None,
+    batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 32,
+    patience: Annotated[int, typer.Option("--patience", min=1)] = 5,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
+    device: Annotated[str, typer.Option("--device")] = "cuda",
+) -> None:
+    """Train and atomically collect all five image-level MIL OOF folds."""
+    artifacts = train_mil_oof(
+        MilOofConfig(
+            real_manifest=real_manifest,
+            fold_manifest=fold_manifest,
+            feature_manifest=feature_manifest,
+            output_dir=output_dir,
+            epochs=epochs,
+            max_steps=max_steps,
+            batch_size=batch_size,
+            patience=patience,
+            seed=seed,
+            device=device,
+        )
+    )
+    typer.echo(f"image_oof={artifacts.image_oof}")
+    typer.echo(f"inventory={artifacts.inventory}")
+    typer.echo(f"metrics={artifacts.metrics}")
+
+
 @evaluate_app.command("glyph")
 def evaluate_glyph_command(
     manifest: Annotated[Path, typer.Option("--manifest")],
@@ -406,10 +439,10 @@ def evaluate_real_seed_command(
     common_chars: Annotated[Path, typer.Option("--common-chars")],
     source_lock: Annotated[Path, typer.Option("--source-lock")],
     dependency_lock: Annotated[Path, typer.Option("--dependency-lock")],
+    character_model_inventory: Annotated[Path, typer.Option("--character-inventory")],
+    image_model_inventory: Annotated[Path, typer.Option("--image-inventory")],
     output_dir: Annotated[Path, typer.Option("--output-dir")],
-    prevalence: Annotated[
-        float, typer.Option("--prevalence", min=0.000001, max=0.999999)
-    ] = 0.001,
+    prevalence: Annotated[float, typer.Option("--prevalence", min=0.000001, max=0.999999)] = 0.001,
     threshold: Annotated[float, typer.Option("--threshold", min=0, max=1)] = 0.5,
 ) -> None:
     """Compare aligned real development OOF scores without opening locked-test data."""
@@ -426,6 +459,8 @@ def evaluate_real_seed_command(
             common_chars=common_chars,
             source_lock=source_lock,
             dependency_lock=dependency_lock,
+            character_model_inventory=character_model_inventory,
+            image_model_inventory=image_model_inventory,
             output_dir=output_dir,
             prevalence=prevalence,
             threshold=threshold,

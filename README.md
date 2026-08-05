@@ -360,20 +360,18 @@ uv run poor-word train real-oof \
   --output-dir artifacts/real-oof-v1 \
   --device cuda --epochs 10 --batch-size 64
 
-# held-out-fold 需要依次执行 0、1、2、3、4
-uv run poor-word train mil \
+uv run poor-word train mil-oof \
   --real-manifest data/real/versioned/seed-v1/manifest.parquet \
   --fold-manifest data/real/versioned/seed-v1/split-v1/folds.parquet \
   --feature-manifest artifacts/real-oof-v1/oof/oof.parquet \
-  --held-out-fold 0 --output-dir artifacts/mil-v1/fold-0 \
+  --output-dir artifacts/mil-oof-v1 \
   --device cuda --epochs 30 --batch-size 32
 ```
 
-每个 MIL 折输出 `image-scores.parquet`，对该折每张合规验证图片恰有一行，包括没有检测到
-字符的 zero-character bag；`attention-candidates.parquet` 仍只是人工诊断候选，不能冒充
-全量图像 OOF 分数。运行编排应只拼接五个冻结的 `image-scores.parquet` 为一个不可变
-`image-oof.parquet`，不得重采样、过滤或去掉 zero-character 行；报告入口会再次验证 ID、
-fold、label、checkpoint 和所有输入 SHA-256，并拒绝漏行、多行或任何 locked-test 行。
+`mil-oof` 在单一 staging root 中依次运行五折。每折 `image-scores.parquet` 对该折每张
+合规验证图片恰有一行，包括没有检测到字符的 zero-character bag；命令严格验证后才原子
+发布 `image-oof.parquet`、`model-inventory.json` 和 `metrics.json`。任一折失败会清理整个
+staging root。`attention-candidates.parquet` 仍只是人工诊断候选，不能冒充全量 OOF 分数。
 
 PP-OCRv5 server 的字符基线清单必须对每个字符 OOF ID 恰有一行，包含 `crop_id`、
 `image_id`、`fold`、`decision`、`anomaly_kind`、单字符 `text`、`ocr_confidence`、
@@ -393,12 +391,15 @@ uv run poor-word evaluate real-seed \
   --crop-manifest data/real/versioned/seed-v1/crops-v1/crops.parquet \
   --gold-manifest data/real/versioned/seed-v1/gold-v1/gold-crops.parquet \
   --character-oof artifacts/real-oof-v1/oof/oof.parquet \
-  --image-oof artifacts/mil-v1/image-oof.parquet \
+  --image-oof artifacts/mil-oof-v1/image-oof.parquet \
   --ocr-manifest artifacts/ocr-character-scores.parquet \
   --ocr-audit artifacts/ocr-audit-l20.json \
   --common-chars data/raw/common_chars_3500.txt \
   --source-lock data/locks/common_chars_3500.lock.json \
-  --dependency-lock uv.lock --prevalence 0.001 \
+  --dependency-lock uv.lock \
+  --character-inventory artifacts/real-oof-v1/model-inventory.json \
+  --image-inventory artifacts/mil-oof-v1/model-inventory.json \
+  --prevalence 0.001 \
   --output-dir artifacts/real-seed-report-v1
 ```
 

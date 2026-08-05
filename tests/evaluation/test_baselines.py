@@ -50,3 +50,9 @@ def test_low_ocr_confidence_requests_review_but_does_not_auto_block() -> None:
     assert result.ocr_confidence_risk == 0.9
     assert result.needs_review is True
     assert result.auto_block is False
+    assert result.auto_block_score == 0.0
+
+
+def test_visual_or_structurally_invalid_evidence_sets_block_policy_score() -> None:
+    assert _score("常", visual=0.9).auto_block_score == 1.0
+    assert _score("�").auto_block_score == 1.0

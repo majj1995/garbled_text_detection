@@ -56,7 +56,7 @@ def _inputs(tmp_path: Path) -> MilTrainConfig:
             },
             {
                 "image_id": "locked",
-                "image_label": "ABNORMAL",
+                "image_label": "LOCKED_LABEL_MUST_NOT_BE_READ",
                 "split_role": "LOCKED_TEST",
                 "training_eligible": False,
             },

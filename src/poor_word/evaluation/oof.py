@@ -52,9 +52,7 @@ def _bootstrap_aucpr(
 
 def _fold_metrics(rows: list[dict[str, Any]], fold: int) -> dict[str, object]:
     labeled = [
-        row
-        for row in rows
-        if row["decision"] in {Decision.PASS.value, Decision.BLOCK.value}
+        row for row in rows if row["decision"] in {Decision.PASS.value, Decision.BLOCK.value}
     ]
     labels = np.asarray(
         [row["decision"] == Decision.BLOCK.value for row in labeled], dtype=np.int64
@@ -111,9 +109,7 @@ def collect_oof_scores(
     }
     fold_rows = cast(
         list[dict[str, Any]],
-        pq.read_table(
-            fold_manifest, columns=["image_id", "fold", "split_role"]
-        ).to_pylist(),
+        pq.read_table(fold_manifest, columns=["image_id", "fold", "split_role"]).to_pylist(),
     )
     assignments: dict[str, tuple[int, str]] = {}
     valid_roles = {role.value for role in SplitRole}
@@ -155,9 +151,7 @@ def collect_oof_scores(
             raise ValueError(f"duplicate or invalid held-out fold artifact: {fold}")
         seen_folds.add(fold)
         checkpoint_hash = _sha256(artifact.checkpoint)
-        checkpoint_raw = torch.load(
-            artifact.checkpoint, map_location="cpu", weights_only=True
-        )
+        checkpoint_raw = torch.load(artifact.checkpoint, map_location="cpu", weights_only=True)
         if not isinstance(checkpoint_raw, dict):
             raise ValueError(f"fold {fold} checkpoint metadata is malformed")
         checkpoint = cast(dict[str, object], checkpoint_raw)
@@ -283,4 +277,40 @@ def collect_oof_scores(
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+    inventory_root = destination.parent.resolve()
+    inventory_folds: list[dict[str, object]] = []
+    for artifact in sorted(fold_artifacts, key=lambda item: item.held_out_fold):
+        paths: dict[str, str] = {}
+        for field, path in (
+            ("checkpoint", artifact.checkpoint),
+            ("metrics", artifact.metrics),
+            ("scores", artifact.scores),
+        ):
+            try:
+                paths[field] = str(path.resolve().relative_to(inventory_root))
+            except ValueError as error:
+                raise ValueError("character fold artifact escapes inventory root") from error
+        inventory_folds.append(
+            {
+                "held_out_fold": artifact.held_out_fold,
+                **paths,
+                "checkpoint_sha256": _sha256(artifact.checkpoint),
+                "metrics_sha256": _sha256(artifact.metrics),
+                "scores_sha256": _sha256(artifact.scores),
+                "scoring_crop_ids": list(artifact.scoring_crop_ids),
+            }
+        )
+    inventory_path = destination.parent / "model-inventory.json"
+    inventory_part = inventory_path.with_name(f".{inventory_path.name}.part-{os.getpid()}")
+    inventory_part.write_text(
+        json.dumps(
+            {"schema_version": 1, "kind": "character_oof", "folds": inventory_folds},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    inventory_part.replace(inventory_path)
     return destination / "oof.parquet"

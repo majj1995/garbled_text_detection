@@ -9,11 +9,13 @@ import platform
 import random
 import shutil
 import subprocess
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 import pyarrow as pa  # type: ignore[import-untyped]
+import pyarrow.dataset as ds  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import torch
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,12 +48,40 @@ class MilTrainConfig(BaseModel):
     device: str = "cuda"
 
 
+class MilOofConfig(BaseModel):
+    """Inputs for atomic training and collection of all five MIL OOF folds."""
+
+    model_config = ConfigDict(frozen=True)
+
+    real_manifest: Path
+    fold_manifest: Path
+    feature_manifest: Path
+    output_dir: Path
+    epochs: int = Field(default=30, ge=1)
+    max_steps: int | None = Field(default=None, ge=1)
+    batch_size: int = Field(default=32, ge=1)
+    patience: int = Field(default=5, ge=1)
+    min_delta: float = Field(default=1e-4, ge=0)
+    learning_rate: float = Field(default=1e-3, gt=0)
+    normal_instance_weight: float = Field(default=0.25, ge=0)
+    hidden_dim: int = Field(default=32, ge=1)
+    seed: int = Field(default=20260804, ge=0)
+    device: str = "cuda"
+
+
 @dataclass(frozen=True)
 class MilArtifacts:
     checkpoint: Path
     metrics: Path
     attention_candidates: Path
     image_scores: Path
+
+
+@dataclass(frozen=True)
+class MilOofArtifacts:
+    image_oof: Path
+    inventory: Path
+    metrics: Path
 
 
 @dataclass(frozen=True)
@@ -135,27 +165,56 @@ def _load_inputs(
     for path in (config.real_manifest, config.fold_manifest, config.feature_manifest):
         if not path.is_file():
             raise ValueError(f"required manifest does not exist: {path}")
-    real_rows = cast(list[dict[str, Any]], pq.read_table(config.real_manifest).to_pylist())
+    real_dataset = ds.dataset(config.real_manifest, format="parquet")
+    real_metadata = cast(
+        list[dict[str, Any]],
+        real_dataset.to_table(
+            columns=["image_id", "split_role", "training_eligible"]
+        ).to_pylist(),
+    )
+    real_rows = cast(
+        list[dict[str, Any]],
+        real_dataset.to_table(
+            columns=["image_id", "image_label", "split_role", "training_eligible"],
+            filter=ds.field("split_role") != SplitRole.LOCKED_TEST.value,
+        ).to_pylist(),
+    )
     fold_rows = cast(list[dict[str, Any]], pq.read_table(config.fold_manifest).to_pylist())
     feature_rows = cast(list[dict[str, Any]], pq.read_table(config.feature_manifest).to_pylist())
 
     real: dict[str, dict[str, Any]] = {}
     allowed_roles = {role.value for role in SplitRole}
     allowed_labels = {label.value for label in ImageLabel}
-    for row in real_rows:
+    for row in real_metadata:
         image_id = _required_text(row, "image_id", "real manifest")
         if image_id in real:
             raise ValueError(f"real manifest has duplicate image_id: {image_id}")
-        label = row.get("image_label")
         role = row.get("split_role")
         eligible = row.get("training_eligible")
-        if not isinstance(label, str) or label not in allowed_labels:
-            raise ValueError("real manifest has malformed image_label")
         if not isinstance(role, str) or role not in allowed_roles:
             raise ValueError("real manifest has malformed split_role")
         if not isinstance(eligible, bool):
             raise ValueError("real manifest has malformed training_eligible")
         real[image_id] = row
+    safe_ids: set[str] = set()
+    for row in real_rows:
+        image_id = _required_text(row, "image_id", "real manifest")
+        if image_id in safe_ids or image_id not in real:
+            raise ValueError("real manifest has duplicate or unknown development image_id")
+        safe_ids.add(image_id)
+        if row.get("split_role") != real[image_id]["split_role"]:
+            raise ValueError("real manifest development projection mismatch")
+        label = row.get("image_label")
+        if not isinstance(label, str) or label not in allowed_labels:
+            raise ValueError("real manifest has malformed image_label")
+        real[image_id]["image_label"] = label
+    expected_safe = {
+        image_id
+        for image_id, row in real.items()
+        if row["split_role"] != SplitRole.LOCKED_TEST.value
+    }
+    if safe_ids != expected_safe:
+        raise ValueError("real manifest development projection is incomplete")
 
     folds: dict[str, dict[str, Any]] = {}
     component_folds: dict[str, int] = {}
@@ -570,4 +629,234 @@ def train_mil_fold(config: MilTrainConfig) -> MilArtifacts:
         config.output_dir / "metrics.json",
         config.output_dir / "attention-candidates.parquet",
         config.output_dir / "image-scores.parquet",
+    )
+
+
+def _mil_oof_contract(config: MilOofConfig) -> tuple[dict[int, dict[str, str]], set[str]]:
+    real_dataset = ds.dataset(config.real_manifest, format="parquet")
+    real_metadata = cast(
+        list[dict[str, Any]],
+        real_dataset.to_table(
+            columns=["image_id", "split_role", "training_eligible"]
+        ).to_pylist(),
+    )
+    real_rows = cast(
+        list[dict[str, Any]],
+        real_dataset.to_table(
+            columns=["image_id", "image_label", "split_role", "training_eligible"],
+            filter=ds.field("split_role") != SplitRole.LOCKED_TEST.value,
+        ).to_pylist(),
+    )
+    fold_rows = cast(
+        list[dict[str, Any]],
+        pq.read_table(
+            config.fold_manifest,
+            columns=["image_id", "fold", "split_role", "component_id"],
+        ).to_pylist(),
+    )
+    real: dict[str, dict[str, Any]] = {}
+    locked: set[str] = set()
+    for row in real_metadata:
+        image_id = _required_text(row, "image_id", "real manifest")
+        if image_id in real:
+            raise ValueError(f"real manifest has duplicate image_id: {image_id}")
+        if not isinstance(row.get("training_eligible"), bool):
+            raise ValueError("real manifest has malformed training_eligible")
+        if row.get("split_role") not in {item.value for item in SplitRole}:
+            raise ValueError("real manifest has malformed split_role")
+        real[image_id] = row
+        if row["split_role"] == SplitRole.LOCKED_TEST.value:
+            locked.add(image_id)
+    safe_ids: set[str] = set()
+    for row in real_rows:
+        image_id = _required_text(row, "image_id", "real manifest")
+        if image_id in safe_ids or image_id not in real:
+            raise ValueError("real manifest has duplicate or unknown development image_id")
+        safe_ids.add(image_id)
+        if row.get("split_role") != real[image_id]["split_role"]:
+            raise ValueError("real manifest development projection mismatch")
+        if row.get("image_label") not in {item.value for item in ImageLabel}:
+            raise ValueError("real manifest has malformed image_label")
+        real[image_id]["image_label"] = row["image_label"]
+    if safe_ids != set(real) - locked:
+        raise ValueError("real manifest development projection is incomplete")
+    expected: dict[int, dict[str, str]] = defaultdict(dict)
+    seen: set[str] = set()
+    component_folds: dict[str, int] = {}
+    for row in fold_rows:
+        image_id = _required_text(row, "image_id", "fold manifest")
+        if image_id in seen or image_id not in real:
+            raise ValueError("fold manifest has duplicate or unknown image_id")
+        seen.add(image_id)
+        fold = row.get("fold")
+        if type(fold) is not int:
+            raise ValueError("fold manifest has malformed fold")
+        role = _required_text(row, "split_role", "fold manifest")
+        if role != real[image_id]["split_role"]:
+            raise ValueError("real/fold split_role mismatch")
+        component = _required_text(row, "component_id", "fold manifest")
+        previous = component_folds.setdefault(component, fold)
+        if previous != fold:
+            raise ValueError("component_id crosses folds")
+        if role == SplitRole.LOCKED_TEST.value:
+            if fold != -1:
+                raise ValueError("locked-test image must have fold=-1")
+            continue
+        if fold < 0:
+            raise ValueError("development image has negative fold")
+        if real[image_id]["training_eligible"] is True and role in {
+            SplitRole.DEV.value,
+            SplitRole.IMAGE_ONLY.value,
+            SplitRole.NORMAL_REPLAY.value,
+        }:
+            expected[fold][image_id] = str(real[image_id]["image_label"])
+    if seen != set(real):
+        raise ValueError("fold manifest IDs do not exactly match real manifest")
+    if set(expected) != set(range(5)):
+        raise ValueError("MIL OOF requires development folds 0..4")
+    return dict(expected), locked
+
+
+def train_mil_oof(config: MilOofConfig) -> MilOofArtifacts:
+    """Train five MIL folds and atomically publish complete image-level OOF scores."""
+    if config.output_dir.exists():
+        raise ValueError(f"MIL OOF output directory already exists: {config.output_dir}")
+    for path in (config.real_manifest, config.fold_manifest, config.feature_manifest):
+        if not path.is_file():
+            raise ValueError(f"required manifest does not exist: {path}")
+    expected, locked = _mil_oof_contract(config)
+    trusted_hashes = {
+        "real_manifest_sha256": _sha256(config.real_manifest),
+        "fold_manifest_sha256": _sha256(config.fold_manifest),
+        "feature_manifest_sha256": _sha256(config.feature_manifest),
+    }
+    config.output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = config.output_dir.with_name(f".{config.output_dir.name}.part-{os.getpid()}")
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir()
+    rows: list[dict[str, Any]] = []
+    inventory_folds: list[dict[str, object]] = []
+    try:
+        for fold in range(5):
+            artifact = train_mil_fold(
+                MilTrainConfig(
+                    real_manifest=config.real_manifest,
+                    fold_manifest=config.fold_manifest,
+                    feature_manifest=config.feature_manifest,
+                    output_dir=staging / f"fold-{fold}",
+                    held_out_fold=fold,
+                    epochs=config.epochs,
+                    max_steps=config.max_steps,
+                    batch_size=config.batch_size,
+                    patience=config.patience,
+                    min_delta=config.min_delta,
+                    learning_rate=config.learning_rate,
+                    normal_instance_weight=config.normal_instance_weight,
+                    hidden_dim=config.hidden_dim,
+                    seed=config.seed,
+                    device=config.device,
+                )
+            )
+            checkpoint_hash = _sha256(artifact.checkpoint)
+            checkpoint_raw = torch.load(artifact.checkpoint, map_location="cpu", weights_only=True)
+            if not isinstance(checkpoint_raw, dict):
+                raise ValueError(f"MIL fold {fold} checkpoint is malformed")
+            checkpoint = cast(dict[str, Any], checkpoint_raw)
+            expected_ids = sorted(expected[fold])
+            if checkpoint.get("held_out_fold") != fold:
+                raise ValueError(f"MIL fold {fold} checkpoint held_out_fold mismatch")
+            if checkpoint.get("validation_image_ids") != expected_ids:
+                raise ValueError(f"MIL fold {fold} validation IDs mismatch")
+            train_ids = checkpoint.get("train_image_ids")
+            if not isinstance(train_ids, list) or not all(
+                isinstance(item, str) for item in train_ids
+            ):
+                raise ValueError(f"MIL fold {fold} train IDs are malformed")
+            if set(train_ids) & set(expected_ids) or set(train_ids) & locked:
+                raise ValueError(f"MIL fold {fold} training/scoring isolation failed")
+            for field, trusted in trusted_hashes.items():
+                if checkpoint.get(field) != trusted:
+                    raise ValueError(f"MIL fold {fold} checkpoint {field} mismatch")
+
+            fold_rows = cast(list[dict[str, Any]], pq.read_table(artifact.image_scores).to_pylist())
+            actual_ids: set[str] = set()
+            for row in fold_rows:
+                image_id = _required_text(row, "image_id", "MIL image scores")
+                if image_id in actual_ids or image_id not in expected[fold]:
+                    raise ValueError(f"MIL fold {fold} has duplicate or unexpected image score")
+                actual_ids.add(image_id)
+                if row.get("fold") != fold or row.get("held_out_fold") != fold:
+                    raise ValueError(f"MIL fold {fold} score fold mismatch")
+                if row.get("image_label") != expected[fold][image_id]:
+                    raise ValueError(f"MIL fold {fold} score label mismatch")
+                if row.get("checkpoint_sha256") != checkpoint_hash:
+                    raise ValueError(f"MIL fold {fold} score checkpoint hash mismatch")
+                for field, trusted in trusted_hashes.items():
+                    if row.get(field) != trusted:
+                        raise ValueError(f"MIL fold {fold} score {field} mismatch")
+                rows.append(row)
+            if actual_ids != set(expected_ids):
+                raise ValueError(f"MIL fold {fold} image scores do not exactly cover validation")
+            metrics_raw = json.loads(artifact.metrics.read_text(encoding="utf-8"))
+            if not isinstance(metrics_raw, dict):
+                raise ValueError(f"MIL fold {fold} metrics are malformed")
+            if (
+                metrics_raw.get("held_out_fold") != fold
+                or metrics_raw.get("checkpoint_sha256") != checkpoint_hash
+                or metrics_raw.get("image_scores_sha256") != _sha256(artifact.image_scores)
+                or metrics_raw.get("validation_image_ids") != expected_ids
+            ):
+                raise ValueError(f"MIL fold {fold} metrics provenance mismatch")
+            inventory_folds.append(
+                {
+                    "held_out_fold": fold,
+                    "checkpoint": f"fold-{fold}/model.pt",
+                    "checkpoint_sha256": checkpoint_hash,
+                    "metrics": f"fold-{fold}/metrics.json",
+                    "metrics_sha256": _sha256(artifact.metrics),
+                    "scores": f"fold-{fold}/image-scores.parquet",
+                    "scores_sha256": _sha256(artifact.image_scores),
+                    "validation_image_ids": expected_ids,
+                }
+            )
+        rows.sort(key=lambda row: (int(row["fold"]), str(row["image_id"])))
+        image_oof = staging / "image-oof.parquet"
+        pq.write_table(pa.Table.from_pylist(rows), image_oof, compression="zstd", version="2.6")
+        inventory = staging / "model-inventory.json"
+        inventory.write_text(
+            json.dumps(
+                {"schema_version": 1, "kind": "image_oof", "folds": inventory_folds},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        metrics = staging / "metrics.json"
+        metrics.write_text(
+            json.dumps(
+                {
+                    "image_oof_sha256": _sha256(image_oof),
+                    "image_count": len(rows),
+                    "locked_test_rows": 0,
+                    "folds": list(range(5)),
+                    **trusted_hashes,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        staging.replace(config.output_dir)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return MilOofArtifacts(
+        config.output_dir / "image-oof.parquet",
+        config.output_dir / "model-inventory.json",
+        config.output_dir / "metrics.json",
     )

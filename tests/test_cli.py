@@ -565,7 +565,7 @@ def test_mil_command_delegates_trusted_manifests_and_emits_outputs(
 def test_real_seed_report_command_exposes_and_delegates_all_core_inputs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    help_result = runner.invoke(cli.app, ["evaluate", "real-seed", "--help"])
+    help_result = runner.invoke(cli.app, ["evaluate", "real-seed", "--help"], terminal_width=200)
     assert help_result.exit_code == 0
     for option in (
         "--real-manifest",
@@ -579,6 +579,8 @@ def test_real_seed_report_command_exposes_and_delegates_all_core_inputs(
         "--common-chars",
         "--source-lock",
         "--dependency-lock",
+        "--character-inventory",
+        "--image-inventory",
         "--output-dir",
         "--prevalence",
     ):
@@ -609,6 +611,8 @@ def test_real_seed_report_command_exposes_and_delegates_all_core_inputs(
         "common-chars": "common.txt",
         "source-lock": "source.json",
         "dependency-lock": "uv.lock",
+        "character-inventory": "character-model-inventory.json",
+        "image-inventory": "image-model-inventory.json",
         "output-dir": "report",
     }
     for option, value in values.items():
@@ -622,3 +626,44 @@ def test_real_seed_report_command_exposes_and_delegates_all_core_inputs(
     assert captured[0].prevalence == 0.001
     assert captured[0].threshold == 0.6
     assert f"json={artifacts.json_path}" in result.stdout
+
+
+def test_mil_oof_command_delegates_and_emits_atomic_collection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifacts = SimpleNamespace(
+        image_oof=tmp_path / "image-oof.parquet",
+        inventory=tmp_path / "model-inventory.json",
+        metrics=tmp_path / "metrics.json",
+    )
+    captured: list[object] = []
+
+    def fake_train(config: object) -> object:
+        captured.append(config)
+        return artifacts
+
+    monkeypatch.setattr(cli, "train_mil_oof", fake_train)
+    result = runner.invoke(
+        cli.app,
+        [
+            "train",
+            "mil-oof",
+            "--real-manifest",
+            str(tmp_path / "real.parquet"),
+            "--fold-manifest",
+            str(tmp_path / "folds.parquet"),
+            "--feature-manifest",
+            str(tmp_path / "features.parquet"),
+            "--output-dir",
+            str(tmp_path / "oof"),
+            "--device",
+            "cpu",
+            "--max-steps",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0
+    assert len(captured) == 1
+    assert captured[0].device == "cpu"
+    assert f"image_oof={artifacts.image_oof}" in result.stdout
+    assert f"inventory={artifacts.inventory}" in result.stdout

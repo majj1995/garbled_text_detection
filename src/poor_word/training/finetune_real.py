@@ -307,9 +307,7 @@ def _restore_model(
     if config.embedding_dim is not None and config.embedding_dim != embedding_dim:
         raise ValueError("configured embedding_dim does not match adapted checkpoint")
     if not catalog or not all(
-        isinstance(character, str)
-        and character
-        and type(index) is int
+        isinstance(character, str) and character and type(index) is int
         for character, index in catalog.items()
     ):
         raise ValueError("adapted checkpoint has invalid character catalog")
@@ -350,9 +348,7 @@ def _parquet_bytes(rows: list[dict[str, object]], schema: pa.Schema) -> bytes:
     return cast(bytes, sink.getvalue().to_pybytes())
 
 
-def finetune_real_fold(
-    config: RealFineTuneConfig, held_out_fold: int
-) -> FoldModelArtifacts:
+def finetune_real_fold(config: RealFineTuneConfig, held_out_fold: int) -> FoldModelArtifacts:
     """Fine-tune one fold and score only its held-out reviewed development crops."""
     if config.output_dir.exists():
         raise ValueError(f"fold output directory already exists: {config.output_dir}")
@@ -413,9 +409,7 @@ def finetune_real_fold(
             )
             synthetic_selected = [
                 synthetic[
-                    synthetic_order[
-                        (batch_index * synthetic_count + offset) % len(synthetic_order)
-                    ]
+                    synthetic_order[(batch_index * synthetic_count + offset) % len(synthetic_order)]
                 ]
                 for offset in range(synthetic_count)
             ]
@@ -522,6 +516,7 @@ def finetune_real_fold(
             {
                 "crop_id": item.crop_id,
                 "image_id": item.image_id,
+                "crop_path": str(item.path.relative_to(config.crop_manifest.parent.resolve())),
                 "fold": held_out_fold,
                 "decision": item.decision,
                 "anomaly_kind": item.anomaly_kind,
@@ -529,8 +524,11 @@ def finetune_real_fold(
                 "model_id": f"real-fold-{held_out_fold}",
                 "checkpoint_sha256": checkpoint_hash,
                 "parent_checkpoint_sha256": hashes["parent_checkpoint_sha256"],
+                "real_manifest_sha256": hashes["real_manifest_sha256"],
+                "crop_manifest_sha256": hashes["crop_manifest_sha256"],
                 "fold_manifest_sha256": hashes["fold_manifest_sha256"],
                 "gold_manifest_sha256": hashes["gold_manifest_sha256"],
+                "synthetic_manifest_sha256": hashes["synthetic_manifest_sha256"],
             }
             for item, risk in raw_scores
         ]
@@ -538,6 +536,7 @@ def finetune_real_fold(
             [
                 ("crop_id", pa.string()),
                 ("image_id", pa.string()),
+                ("crop_path", pa.string()),
                 ("fold", pa.int64()),
                 ("decision", pa.string()),
                 ("anomaly_kind", pa.string()),
@@ -545,8 +544,11 @@ def finetune_real_fold(
                 ("model_id", pa.string()),
                 ("checkpoint_sha256", pa.string()),
                 ("parent_checkpoint_sha256", pa.string()),
+                ("real_manifest_sha256", pa.string()),
+                ("crop_manifest_sha256", pa.string()),
                 ("fold_manifest_sha256", pa.string()),
                 ("gold_manifest_sha256", pa.string()),
+                ("synthetic_manifest_sha256", pa.string()),
             ]
         )
         scores = staging / "scores.parquet"
@@ -563,6 +565,8 @@ def finetune_real_fold(
                     "synthetic_replay_count": len(synthetic),
                     "scoring_count": len(inputs.scoring),
                     "checkpoint_sha256": checkpoint_hash,
+                    "scores_sha256": _sha256(scores),
+                    "scoring_crop_ids": [item.crop_id for item in inputs.scoring],
                     "cpu_smoke_backbone_frozen": cpu_smoke,
                     **hashes,
                 },

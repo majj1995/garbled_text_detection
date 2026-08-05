@@ -39,6 +39,7 @@ class BaselineScores(BaseModel):
     ocr_confidence_risk: float = Field(ge=0.0, le=1.0)
     membership_risk: float = Field(ge=0.0, le=1.0)
     combined_risk: float = Field(ge=0.0, le=1.0)
+    auto_block_score: float = Field(ge=0.0, le=1.0)
     unicode_class: UnicodeClass
     out_of_catalog: bool
     text_rule_anomaly: bool
@@ -117,6 +118,7 @@ def score_baselines(
         ocr_confidence_risk=ocr_risk,
         membership_risk=membership_risk,
         combined_risk=max(ocr_risk, membership_risk, visual_score),
+        auto_block_score=float(auto_block),
         unicode_class=unicode_class,
         out_of_catalog=out_of_catalog,
         text_rule_anomaly=unsafe_text or other_text,
