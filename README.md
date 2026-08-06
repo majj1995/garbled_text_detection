@@ -22,6 +22,19 @@ chflags -R nohidden .venv
 工程兼容 Python 3.11–3.12。Intel macOS 本地环境使用最后一组提供对应 wheel 的
 PyTorch 2.2.2；Linux/L20 训练环境使用 PyTorch 2.7.1，由根目录 `uv.lock` 管理。
 
+仓库内置 `data/generated/smoke-a`、`data/generated/smoke-b` 与
+`artifacts/train-smoke`，用于克隆后的 CPU 冒烟验证；`data/raw` 中同时附带来源已锁定、
+许可已登记的字体和常用汉字表。这批模型与数据只证明工程链路可运行，不代表生产效果。
+模型权重通过 Git LFS 保存，克隆机器需先安装 Git LFS，并在克隆后执行：
+
+```bash
+git lfs install
+git lfs pull
+```
+
+目录级忽略规则仍然保留，因此后续新增的业务原图、完整训练集和实验产物不会被自动加入
+Git；如需发布新的已审计版本，应显式选择文件并复核许可、隐私和体积。
+
 PaddlePaddle 与 PyTorch 对 CUDA/NCCL 运行时存在互斥的精确版本约束，因此
 PP-OCRv5 使用 `environments/ocr` 下兼容 Python 3.11–3.12、在 L20 固定 3.11 的
 独立 uv 环境和锁文件。两个

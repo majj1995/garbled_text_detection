@@ -1,0 +1,28 @@
+{
+  "cpu_smoke_backbone_frozen": true,
+  "device": "cpu",
+  "elapsed_seconds": 4.5270624270197,
+  "git_commit": "3594346d59fcbc77afbb5c593683cf0076768663",
+  "loss_history": [
+    {
+      "classification": 0.0,
+      "contrastive": 0.0,
+      "energy_margin": 1.3052279949188232,
+      "step": 0.0,
+      "total": 0.6526139974594116
+    },
+    {
+      "classification": 2.316345691680908,
+      "contrastive": -0.0,
+      "energy_margin": 1.0127265453338623,
+      "step": 1.0,
+      "total": 2.822709083557129
+    }
+  ],
+  "manifest_sha256": "406a06d2815cb718e0af1bcc419e98098c41bf5f627f1b27a071e7c2f634757e",
+  "seed": 20260804,
+  "steps": 2,
+  "synthetic_ood_aucpr": 1.0,
+  "uv_lock_sha256": "b6a9b3ecfb673031094952e3401dd256634ec293ac935060a430ea001a8b70c3",
+  "validation_nearest_prototype_accuracy": 1.0
+}

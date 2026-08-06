@@ -1,0 +1,6 @@
+{
+  "catalog_sha256": "792dfc6de6881055fc6bfb9ba3fe6ff758b885b198d42f4244c8e53e0ed9eadb",
+  "creation_command": "poor-word train glyph",
+  "encoder_checkpoint_sha256": "81b2a52d7d6d871ceddad512f2023fda2a2754e361ccb9ce5750b7cc20dcf730",
+  "source_manifest_sha256": "406a06d2815cb718e0af1bcc419e98098c41bf5f627f1b27a071e7c2f634757e"
+}
