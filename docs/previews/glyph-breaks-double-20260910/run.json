@@ -1,0 +1,113 @@
+{
+  "purpose": "fixed_attempt_strength_calibration_not_training_or_evaluation",
+  "generator_version": "stroke-break-double-v1",
+  "created_date": "2026-09-10",
+  "slot_count": 20,
+  "double_candidate_count": 7,
+  "double_pixel_changed_vs_one_x_count": 7,
+  "double_pixel_unchanged_vs_one_x_count": 0,
+  "double_skipped_count": 13,
+  "prior_1_15_candidate_count": 17,
+  "prior_1_15_pixel_changed_count": 16,
+  "prior_1_15_pixel_unchanged_count": 1,
+  "length_multipliers": [
+    1.0,
+    1.15,
+    2.0
+  ],
+  "sampling": "original archived accepted attempt only; earlier proposals ignored; no reselection or replacement; production uses first-valid sampling",
+  "input_files_sha256": {
+    "baseline": {
+      "candidates.jsonl": "10c7c883489fb2e6f40d2f8271b750ce0d9b9ccd840d9a73cf4d7d3ad72c63a2",
+      "run.json": "a9a573091308c90089fc8841e048781240ecdf8c5da4205fcb5c8b2339c9cefb",
+      "source.json": "c9e1227144c441b16560576f7421b2250cbff0a6a67e1120434b215a231d0535"
+    },
+    "prior_1_15": {
+      "candidates.jsonl": "c20795c876cfb086e39fa79ba92b56f9cb082b7409c6064064853664f8687020",
+      "pairs.jsonl": "ace0423aa588cbc85b2faf4a1702947109308c6f0dfe24f84a8746f37b4764f3",
+      "run.json": "bd9c15f13ae9f8e46c65872e2abd1136632ba257adabebedb8f4d24ca8652cbd",
+      "source.json": "c9e1227144c441b16560576f7421b2250cbff0a6a67e1120434b215a231d0535"
+    }
+  },
+  "code_sha256": {
+    "stroke_break.py": "75ff1cbcf2cdfb8d979fbbee06658042e362d95c804d3c2df61069f72760ca24",
+    "stroke_corrupt.py": "f87ce149851b4d4f7d1a8535dbfb9f197090e1690adf6cc84ec34b8601306811",
+    "stroke_preview.py": "ff0678c49650cf202dfa88d8aa4b8503ade8905e21deec781ab466520c1e17c8",
+    "preview_v2.py": "7a058b75f5063c113eed99e98f3b4ce9cfe214366cb719cea3ac90528bac9b01"
+  },
+  "comparison_code_sha256": "3da756e3e2557e06e5058f78bedc91bf73e21a8b3da6e79de753f127522bee89",
+  "replay_code_sha256": "926517c964b79d117dd668b40386433eabdfa22936cf3c0d7c66a3e5c6fad76a",
+  "packages": {
+    "numpy": "1.26.4",
+    "pillow": "11.3.0",
+    "opencv-python-headless": "4.11.0.86",
+    "scikit-image": "0.26.0"
+  },
+  "double_skipped": [
+    {
+      "baseline_candidate_id": "sa89678094d2a",
+      "base_char": "貌",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s91507ff6895e",
+      "base_char": "锌",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s90b30135f973",
+      "base_char": "呕",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s801c88531c0c",
+      "base_char": "蛤",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s3c012e0c2489",
+      "base_char": "煌",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "seae1e4a55015",
+      "base_char": "拎",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s897a05796e56",
+      "base_char": "脖",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s835247c09501",
+      "base_char": "叛",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "sbe81db763a59",
+      "base_char": "疲",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s77fabe811f7a",
+      "base_char": "宝",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s7417722c9823",
+      "base_char": "班",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "sf58f047fad50",
+      "base_char": "佐",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s0567dcb2a895",
+      "base_char": "堰",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    }
+  ]
+}
