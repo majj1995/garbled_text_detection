@@ -384,3 +384,71 @@ def test_bridge_specialist_exports_balanced_review_rows_and_provenance(config: A
     page = result.html_path.read_text()
     assert "错误封口" in page and "间隙堵塞" in page
     assert not list(config.output_dir.rglob("*.parquet"))
+
+
+def test_specialist_modes_cannot_silently_override_each_other(config: Any) -> None:
+    """Catch a request for both specialists quietly selecting only one of them."""
+    with pytest.raises(ValueError, match="exclusive"):
+        _module().StrokePreviewConfig.model_validate(
+            {**config.model_dump(), "bridges_only": True, "breaks_only": True}
+        )
+
+
+def test_break_only_preview_keeps_exact_operator_quota_and_review_labels(config: Any) -> None:
+    """Catch filling a break specialist request with any of the other four operators."""
+    config = config.model_copy(update={"breaks_only": True, "per_operator": 2})
+    result = _module().generate_stroke_preview(config)
+    assert result.complete and result.candidate_count == 2
+    rows = [json.loads(line) for line in result.candidates_path.read_text().splitlines()]
+    assert len(rows) == 2 and all(row["operator"] == "break_stroke" for row in rows)
+    assert all(row["decision"] == "REVIEW" and not row["training_eligible"] for row in rows)
+    run = json.loads((config.output_dir / "run.json").read_text())
+    assert run["expected_count"] == 2 and run["missing_count"] == 0
+    assert run["by_operator"] == {
+        "add_stroke": 0,
+        "break_stroke": 2,
+        "bridge": 0,
+        "component_shift": 0,
+        "erase_segment": 0,
+    }
+    assert run["expected_by_bridge_mode"] == {} and run["missing_by_bridge_mode"] == {}
+    assert "stroke_break.py" in run["provenance"]["code_sha256"]
+    assert all(row["bridge_mode"] is None for row in rows)
+    assert not list(config.output_dir.rglob("*.parquet"))
+
+
+def test_break_only_cli_runs_only_the_requested_specialist(config: Any) -> None:
+    """Catch missing CLI wiring or a break request routed to bridge/all-operator slots."""
+    from typer.testing import CliRunner
+
+    from poor_word.cli import app
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "glyphs",
+            "preview-strokes",
+            "--breaks-only",
+            "--output-dir",
+            str(config.output_dir),
+            "--graphics",
+            str(config.graphics_path),
+            "--source-lock",
+            str(config.source_lock_path),
+            "--license",
+            str(config.license_path),
+            "--characters",
+            "".join(config.characters),
+            "--per-operator",
+            "2",
+            "--seed",
+            "19",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    rows = [
+        json.loads(line)
+        for line in (config.output_dir / "candidates.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 2 and all(row["operator"] == "break_stroke" for row in rows)
+    assert all(row["decision"] == "REVIEW" and not row["training_eligible"] for row in rows)

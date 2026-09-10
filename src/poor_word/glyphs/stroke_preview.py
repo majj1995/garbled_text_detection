@@ -26,12 +26,12 @@ from poor_word.glyphs.corrupt import OPERATORS, CorruptionNotApplicable
 from poor_word.glyphs.preview_v2 import PreviewArtifacts, _overview, save_preview_images
 
 _ARPHIC_SHA256 = "3a5e90c0957524a89e48203febcd4492ca4393678abaa7e5b4d70f3ff32b386d"
-_VERSION = "stroke-layer-v2"
+_VERSION = "stroke-layer-v3"
 _BRIDGE_LABELS = {"close_opening": "错误封口", "block_gap": "间隙堵塞"}
 _LABELS = {
     "add_stroke": "多笔添加",
     "erase_segment": "整笔删除",
-    "break_stroke": "关键连接断开",
+    "break_stroke": "单笔内部断裂",
     "component_shift": "重叠位移",
     "bridge": "粘连",
 }
@@ -47,11 +47,14 @@ class StrokePreviewConfig(BaseModel):
     characters: tuple[str, ...]
     per_operator: int = Field(default=10, ge=1, le=100)
     bridges_only: bool = False  # In this mode per_operator is the quota for each subtype.
+    breaks_only: bool = False
     max_attempts_per_slot: int = Field(default=48, ge=1, le=1000)
     seed: int = Field(default=20260910, ge=0)
 
     @model_validator(mode="after")
     def valid_characters(self) -> "StrokePreviewConfig":
+        if self.bridges_only and self.breaks_only:
+            raise ValueError("bridges_only and breaks_only are mutually exclusive")
         if not self.characters or any(len(c) != 1 or c.isspace() for c in self.characters):
             raise ValueError("characters must contain single non-whitespace characters")
         if len(set(self.characters)) != len(self.characters):
@@ -155,6 +158,9 @@ def _stroke_html(rows: list[dict[str, Any]], complete: bool, date: str) -> str:
         "<p>粘连候选分为错误封口和间隙堵塞：前者封闭原先通向外部的空白区域，"
         "后者吞并原图选定的局部笔画间隙。类型和几何证据只在展开后展示，"
         "是否破坏汉字结构仍由人工判断。</p>"
+        "<p>断笔针对同一笔画的内部：要求原先连续的笔画形成两段有面积和长度的部分，"
+        "并在实际 96px 输入中保留清晰断口。仅截短笔端、分离两笔接头或留下微小碎点不算。"
+        "这些检查仍不能代替人工判断。</p>"
         '<p><a href="overview.png">全部候选总览</a> · '
         '<a href="review-template.jsonl" download>审阅模板</a> · '
         '<a href="run.json">配置与跳过统计</a> · '
@@ -190,7 +196,7 @@ def generate_stroke_preview(
     license_bytes = config.license_path.read_bytes()
     if hashlib.sha256(license_bytes).hexdigest() != _ARPHIC_SHA256:
         raise ValueError("stroke source requires the unmodified Arphic license")
-    from poor_word.glyphs import stroke_bridge, stroke_corrupt, stroke_source
+    from poor_word.glyphs import stroke_break, stroke_bridge, stroke_corrupt, stroke_source
 
     records = stroke_source.load_stroke_records(
         config.graphics_path,
@@ -198,13 +204,15 @@ def generate_stroke_preview(
         progress=lambda count: emit(f"validated_stroke_records={count}"),
     )
     emit(f"Usable characters={len(records)}; building review candidates...")
-    slots: list[tuple[str, str | None]] = (
-        [("bridge", mode) for mode in _BRIDGE_LABELS for _ in range(config.per_operator)]
-        if config.bridges_only
-        else [
+    slots: list[tuple[str, str | None]]
+    if config.bridges_only:
+        slots = [("bridge", mode) for mode in _BRIDGE_LABELS for _ in range(config.per_operator)]
+    elif config.breaks_only:
+        slots = [("break_stroke", None) for _ in range(config.per_operator)]
+    else:
+        slots = [
             (operator, None) for operator in sorted(OPERATORS) for _ in range(config.per_operator)
         ]
-    )
     rng = np.random.default_rng(config.seed)
     date = datetime.now(UTC).date().isoformat()
     rows: list[dict[str, Any]] = []
@@ -385,7 +393,7 @@ def generate_stroke_preview(
                     Path(inspect.getfile(module)).name: hashlib.sha256(
                         Path(inspect.getfile(module)).read_bytes()
                     ).hexdigest()
-                    for module in (stroke_corrupt, stroke_source, stroke_bridge)
+                    for module in (stroke_corrupt, stroke_source, stroke_bridge, stroke_break)
                 },
                 "preview_code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "input_views_code_sha256": hashlib.sha256(
