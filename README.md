@@ -85,7 +85,44 @@ uv run poor-word data fetch --source-id noto_sans_sc_regular
 
 下载内容保存在被 Git 忽略的 `data/raw`，可审计锁文件保存在 `data/locks`。
 
-## V2 候选预览：先校准合成质量，不重训
+## 笔画级候选预览：当前优先复核这一版
+
+针对 V2 抽检中“缺笔不完整、断点不关键、位移重叠太弱”的反馈，新增独立的
+`preview-strokes` 命令。使用 Make Me a Hanzi 的原生逐笔画轮廓，**不是当前 Noto
+字体的笔画分割结果**。这一步只校准结构异常，不重训、不修改 V1/V2 数据或旧模型。
+
+拉取代码后，可直接用本地浏览器打开
+[50 个笔画级候选](docs/previews/glyph-strokes-20260910/index.html)，无需 GPU 或启动服务。
+先独立看修改字，再展开原字、操作涉及的完整笔画和变化 mask。目录中的图片、许可、
+笔画层归档需与 HTML 一起保留；按五类分别反馈明显异常、合法可接受、不确定的数量。
+
+需要重新生成时，在项目根目录执行：
+
+```bash
+uv sync --all-groups
+uv run poor-word glyphs preview-strokes --output-dir artifacts/stroke-preview
+```
+
+默认从 3500 常用字中抽取候选，五类各 10 个；添笔一次增加 2–4 笔，缺笔删除整笔后
+重绘剩余笔画，断笔针对交汇/承接位置，位移要求实际 96px 输入出现 15%–45% 的
+目标笔画核心重叠且有明显位移。几何门槛不代表汉字合法性判断。
+粘连目前仅处理原本分离的字形部分，不适合的操作重试或跳过，不使用 V1/V2 弱扰动兜底。
+
+每次运行会严格校验整份笔画文件，在本地 CPU 上可能需要约一分钟，并每 250 条
+打印进度；生成阶段逐个打印候选进度。输出目录必须不存在，配额不足时退出码为 2，
+但保留 `run.json` 和已生成的待复核候选。没有模型下载或训练步骤。
+
+源数据约 31 MB，已锁定提交、SHA-256 和 Arphic-1999 许可。若本地源文件缺失，执行
+`uv run poor-word data fetch --source-id makemeahanzi_graphics`。许可和来源声明在
+`data/licenses/makemeahanzi*`。生成的图片及 NPZ 笔画层带修改说明；分享预览时保留
+其 `ARPHICPL.txt`。资源当前标记 `production_allowed=false`，仅用于这轮校准。
+
+`candidates.jsonl` 全部是 `REVIEW`、`training_eligible=false`，不会生成训练 manifest。
+`layers/*.npz` 保存操作前后的独立笔画层，可用 `np.load(..., allow_pickle=False)` 审计。
+变成另一个合法字不算乱码；能猜出原字也不代表字形合法。不确定项继续待复核。
+本阶段不做复杂广告背景、多字体迁移或业务效果声明。
+
+## V2 候选预览：保留的局部几何基线
 
 针对 V1 抽检中“改动太小、仍是可接受字形”的问题，新增独立的 `preview-v2` 命令。
 **本阶段只生成人工复核候选，不生成训练 manifest，不修改 V1 数据、训练器或模型。**

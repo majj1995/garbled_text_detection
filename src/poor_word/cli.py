@@ -20,6 +20,7 @@ from poor_word.glyphs.catalog import load_common_chars
 from poor_word.glyphs.corrupt import OPERATORS
 from poor_word.glyphs.generate import GenerationConfig, generate_dataset
 from poor_word.glyphs.preview_v2 import PreviewConfig, generate_preview
+from poor_word.glyphs.stroke_preview import StrokePreviewConfig, generate_stroke_preview
 from poor_word.ocr.paddle_v5 import PaddleV5Adapter
 from poor_word.real_data.crops import extract_character_crops
 from poor_word.real_data.ingest import import_real_dataset
@@ -221,6 +222,53 @@ def glyphs_preview_v2(
             seed=seed,
         )
         artifacts = generate_preview(config, progress=typer.echo)
+    except (ValueError, FileNotFoundError, FileExistsError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"preview={artifacts.html_path}")
+    typer.echo(f"overview={artifacts.overview_path}")
+    typer.echo(f"candidates={artifacts.candidates_path}")
+    if not artifacts.complete:
+        raise typer.Exit(code=2)
+
+
+@glyphs_app.command("preview-strokes")
+def glyphs_preview_strokes(
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    graphics: Annotated[Path, typer.Option("--graphics")] = Path(
+        "data/raw/makemeahanzi_graphics.txt"
+    ),
+    source_lock: Annotated[Path, typer.Option("--source-lock")] = Path(
+        "data/locks/makemeahanzi_graphics.lock.json"
+    ),
+    license_path: Annotated[Path, typer.Option("--license")] = Path(
+        "data/licenses/makemeahanzi.ARPHICPL.txt"
+    ),
+    characters: Annotated[str | None, typer.Option("--characters")] = None,
+    per_operator: Annotated[int, typer.Option("--per-operator", min=1, max=100)] = 10,
+    max_attempts_per_slot: Annotated[
+        int, typer.Option("--max-attempts-per-slot", min=1, max=1000)
+    ] = 48,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260910,
+) -> None:
+    """Preview intact-stroke edits; all REVIEW, no OCR, GPU or training."""
+    paths = PathsConfig()
+    try:
+        selected = (
+            tuple(dict.fromkeys(characters))
+            if characters is not None
+            else load_common_chars(paths.raw_path / "common_chars_3500.txt")
+        )
+        config = StrokePreviewConfig(
+            output_dir=output_dir,
+            graphics_path=paths.resolve(graphics),
+            source_lock_path=paths.resolve(source_lock),
+            license_path=paths.resolve(license_path),
+            characters=selected,
+            per_operator=per_operator,
+            max_attempts_per_slot=max_attempts_per_slot,
+            seed=seed,
+        )
+        artifacts = generate_stroke_preview(config, progress=typer.echo)
     except (ValueError, FileNotFoundError, FileExistsError) as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(f"preview={artifacts.html_path}")
