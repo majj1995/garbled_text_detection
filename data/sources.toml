@@ -18,3 +18,10 @@ url = "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/OTF/Simpl
 license_id = "OFL-1.1"
 production_allowed = true
 output_name = "NotoSerifCJKsc-Regular.otf"
+
+[[source]]
+source_id = "makemeahanzi_graphics"
+url = "https://raw.githubusercontent.com/skishore/makemeahanzi/bddc96d41bef78427ed0e034e9f7e31d71fd1b92/graphics.txt"
+license_id = "Arphic-1999"
+production_allowed = false
+output_name = "makemeahanzi_graphics.txt"

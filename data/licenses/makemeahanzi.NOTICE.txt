@@ -1,0 +1,30 @@
+Make Me a Hanzi stroke graphics — calibration resource
+
+Upstream: https://github.com/skishore/makemeahanzi
+Revision: bddc96d41bef78427ed0e034e9f7e31d71fd1b92
+Graphics URL: https://raw.githubusercontent.com/skishore/makemeahanzi/bddc96d41bef78427ed0e034e9f7e31d71fd1b92/graphics.txt
+Downloaded on: 2026-09-10
+Size: 30778076 bytes
+SHA-256: a28c478b5178e98f67f510b2d52fde08a69dc664654ef43498253b9b764d46ee
+
+The bundled data/raw/makemeahanzi_graphics.txt is an unmodified copy of
+upstream graphics.txt. It contains 9574 character records. The separate
+dictionary.txt dataset has not been included.
+
+According to upstream COPYING, graphics.txt is derived from Arphic PL KaitiM
+GB and Arphic PL UKai fonts and is distributed under the Arphic Public License.
+Copyright (C) 1999 Arphic Technology Co., Ltd.
+See makemeahanzi.COPYING.txt and the unmodified makemeahanzi.ARPHICPL.txt.
+
+This project's preview-strokes workflow normalizes and rasterizes the source
+outlines, then creates stroke-edited candidates. It does not modify the bundled
+source file. Distributed derived graphical files carry dated modification
+notices and are provided under Arphic-1999, without warranty. Preview folders
+include ARPHICPL.txt and the source lock; each candidate has an auditable
+before/after layer archive. Preserve these notices and the license when sharing
+the preview. The independently written Python software is separate from these
+licensed graphical assets.
+
+This resource is registered for human calibration only (production_allowed=false).
+No candidate is automatically an illegal Chinese glyph or an approved training
+label. This notice does not constitute clearance for a production deployment.
