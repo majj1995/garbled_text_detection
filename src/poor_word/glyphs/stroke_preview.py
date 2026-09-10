@@ -26,7 +26,8 @@ from poor_word.glyphs.corrupt import OPERATORS, CorruptionNotApplicable
 from poor_word.glyphs.preview_v2 import PreviewArtifacts, _overview, save_preview_images
 
 _ARPHIC_SHA256 = "3a5e90c0957524a89e48203febcd4492ca4393678abaa7e5b4d70f3ff32b386d"
-_VERSION = "stroke-layer-v1"
+_VERSION = "stroke-layer-v2"
+_BRIDGE_LABELS = {"close_opening": "错误封口", "block_gap": "间隙堵塞"}
 _LABELS = {
     "add_stroke": "多笔添加",
     "erase_segment": "整笔删除",
@@ -45,6 +46,7 @@ class StrokePreviewConfig(BaseModel):
     license_path: Path
     characters: tuple[str, ...]
     per_operator: int = Field(default=10, ge=1, le=100)
+    bridges_only: bool = False  # In this mode per_operator is the quota for each subtype.
     max_attempts_per_slot: int = Field(default=48, ge=1, le=1000)
     seed: int = Field(default=20260910, ge=0)
 
@@ -118,7 +120,8 @@ def _stroke_html(rows: list[dict[str, Any]], complete: bool, date: str) -> str:
             for key, label in views
         )
         description = html.escape(
-            f"来源字：{row['base_char']}；{_LABELS[row['operator']]}；"
+            f"来源字：{row['base_char']}；"
+            f"{_BRIDGE_LABELS.get(str(row.get('bridge_mode') or ''), _LABELS[row['operator']])}；"
             f"原笔画序号（从 1 开始）：{[i + 1 for i in row['selected_stroke_indices']]}"
         )
         cards.append(
@@ -149,6 +152,9 @@ def _stroke_html(rows: list[dict[str, Any]], complete: bool, date: str) -> str:
         "还能猜出原字不等于字形合法；变成另一个合法字也不属于乱码。不确定项保留 REVIEW。</p>"
         "<p>使用 Make Me a Hanzi 原生笔画轮廓（Arphic 来源），不是 Noto 跨字体映射。"
         "当前不含复杂广告背景，几何检查不能证明汉字非法。</p>"
+        "<p>粘连候选分为错误封口和间隙堵塞：前者封闭原先通向外部的空白区域，"
+        "后者吞并原图选定的局部笔画间隙。类型和几何证据只在展开后展示，"
+        "是否破坏汉字结构仍由人工判断。</p>"
         '<p><a href="overview.png">全部候选总览</a> · '
         '<a href="review-template.jsonl" download>审阅模板</a> · '
         '<a href="run.json">配置与跳过统计</a> · '
@@ -184,7 +190,7 @@ def generate_stroke_preview(
     license_bytes = config.license_path.read_bytes()
     if hashlib.sha256(license_bytes).hexdigest() != _ARPHIC_SHA256:
         raise ValueError("stroke source requires the unmodified Arphic license")
-    from poor_word.glyphs import stroke_corrupt, stroke_source
+    from poor_word.glyphs import stroke_bridge, stroke_corrupt, stroke_source
 
     records = stroke_source.load_stroke_records(
         config.graphics_path,
@@ -192,7 +198,13 @@ def generate_stroke_preview(
         progress=lambda count: emit(f"validated_stroke_records={count}"),
     )
     emit(f"Usable characters={len(records)}; building review candidates...")
-    slots = [operator for operator in sorted(OPERATORS) for _ in range(config.per_operator)]
+    slots: list[tuple[str, str | None]] = (
+        [("bridge", mode) for mode in _BRIDGE_LABELS for _ in range(config.per_operator)]
+        if config.bridges_only
+        else [
+            (operator, None) for operator in sorted(OPERATORS) for _ in range(config.per_operator)
+        ]
+    )
     rng = np.random.default_rng(config.seed)
     date = datetime.now(UTC).date().isoformat()
     rows: list[dict[str, Any]] = []
@@ -208,7 +220,7 @@ def generate_stroke_preview(
             lock.model_dump_json(indent=2) + "\n", encoding="utf-8"
         )
         (staging / "layers").mkdir()
-        for slot, operator in enumerate(slots):
+        for slot, (operator, requested_mode) in enumerate(slots):
             for _attempt in range(config.max_attempts_per_slot):
                 character = config.characters[int(rng.integers(len(config.characters)))]
                 seed = int(rng.integers(2**63 - 1))
@@ -216,7 +228,14 @@ def generate_stroke_preview(
                 try:
                     layers = stroke_source.render_stroke_layers(records[character])
                     original = np.repeat(np.maximum.reduce(layers)[:, :, None], 3, axis=2)
-                    result = stroke_corrupt.corrupt_stroke_layers(layers, operator, seed)
+                    result = stroke_corrupt.corrupt_stroke_layers(
+                        layers, operator, seed, bridge_mode=requested_mode
+                    )
+                    actual_mode = result.bridge_mode
+                    if operator == "bridge" and actual_mode not in _BRIDGE_LABELS:
+                        raise ValueError("bridge result is missing a supported subtype")
+                    if requested_mode is not None and actual_mode != requested_mode:
+                        raise ValueError("bridge result does not match the requested subtype")
                     actual = np.any(original != result.image, axis=2)
                     if not np.array_equal(actual, result.changed_mask.astype(bool)):
                         raise ValueError("stroke result has an inconsistent change mask")
@@ -235,6 +254,7 @@ def generate_stroke_preview(
                         {
                             "slot": slot,
                             "operator": operator,
+                            "bridge_mode": requested_mode,
                             "base_char": character,
                             "seed": seed,
                             "reason": str(error),
@@ -247,13 +267,16 @@ def generate_stroke_preview(
                         )
                         last_log = time.monotonic()
                     continue
-                identity = _json([_VERSION, lock.sha256, character, operator, seed, pixel_hash])
+                identity = _json(
+                    [_VERSION, lock.sha256, character, operator, actual_mode, seed, pixel_hash]
+                )
                 identifier = "s" + hashlib.sha256(identity.encode()).hexdigest()[:12]
                 selected = result.selected_stroke_indices
                 selected_mask = np.maximum.reduce([layers[index] for index in selected])
                 notice = (
                     f"{date}: normalized and rasterized Make Me a Hanzi outlines; "
-                    f"applied {operator}, source stroke indices (zero based) {list(selected)}, "
+                    f"applied {operator} ({actual_mode or 'not a bridge'}), "
+                    f"source stroke indices (zero based) {list(selected)}, "
                     f"seed {seed}; see candidates.jsonl for metrics and layer archive."
                 )
                 files = save_stroke_assets(
@@ -270,6 +293,7 @@ def generate_stroke_preview(
                     license=np.array("Arphic-1999"),
                     modification=np.array(notice),
                     source_char=np.array(character),
+                    bridge_mode=np.array(actual_mode or ""),
                 )
                 rows.append(
                     {
@@ -280,6 +304,7 @@ def generate_stroke_preview(
                         "label_provenance": "synthetic_stroke_candidate_unreviewed",
                         "base_char": character,
                         "operator": operator,
+                        "bridge_mode": actual_mode,
                         "seed": seed,
                         "source_style": "Make Me a Hanzi (Arphic-derived; not Noto)",
                         "source_sha256": lock.sha256,
@@ -337,6 +362,22 @@ def generate_stroke_preview(
             "by_operator": {
                 op: sum(row["operator"] == op for row in rows) for op in sorted(OPERATORS)
             },
+            "by_bridge_mode": {
+                mode: sum(row["bridge_mode"] == mode for row in rows) for mode in _BRIDGE_LABELS
+            },
+            "expected_by_bridge_mode": (
+                {mode: config.per_operator for mode in _BRIDGE_LABELS}
+                if config.bridges_only
+                else {}
+            ),
+            "missing_by_bridge_mode": (
+                {
+                    mode: config.per_operator - sum(row["bridge_mode"] == mode for row in rows)
+                    for mode in _BRIDGE_LABELS
+                }
+                if config.bridges_only
+                else {}
+            ),
             "config": config.model_dump(mode="json"),
             "source": lock.model_dump(),
             "provenance": {
@@ -344,7 +385,7 @@ def generate_stroke_preview(
                     Path(inspect.getfile(module)).name: hashlib.sha256(
                         Path(inspect.getfile(module)).read_bytes()
                     ).hexdigest()
-                    for module in (stroke_corrupt, stroke_source)
+                    for module in (stroke_corrupt, stroke_source, stroke_bridge)
                 },
                 "preview_code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "input_views_code_sha256": hashlib.sha256(

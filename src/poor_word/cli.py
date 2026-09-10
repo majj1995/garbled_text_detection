@@ -245,6 +245,9 @@ def glyphs_preview_strokes(
     ),
     characters: Annotated[str | None, typer.Option("--characters")] = None,
     per_operator: Annotated[int, typer.Option("--per-operator", min=1, max=100)] = 10,
+    bridges_only: Annotated[
+        bool, typer.Option("--bridges-only", help="Only bridge candidates; quota per subtype.")
+    ] = False,
     max_attempts_per_slot: Annotated[
         int, typer.Option("--max-attempts-per-slot", min=1, max=1000)
     ] = 48,
@@ -265,6 +268,7 @@ def glyphs_preview_strokes(
             license_path=paths.resolve(license_path),
             characters=selected,
             per_operator=per_operator,
+            bridges_only=bridges_only,
             max_attempts_per_slot=max_attempts_per_slot,
             seed=seed,
         )

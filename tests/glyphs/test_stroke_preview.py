@@ -94,7 +94,7 @@ def config(tmp_path: Path) -> Any:
     from poor_word.data.manifest import SourceLock
 
     repo = Path(__file__).resolve().parents[2]
-    characters = tuple("永明田林国回合蛤日木困井一")
+    characters = tuple("永明田林国回合蛤日木困井一的集窗静")
     wanted = set(characters)
     source = tmp_path / "graphics.txt"
     with (repo / "data/raw/makemeahanzi_graphics.txt").open(encoding="utf-8") as stream:
@@ -304,3 +304,83 @@ def test_stroke_cli_reports_unfilled_quotas_without_success(config: Any) -> None
     )
     assert result.exit_code == 2, result.output
     assert json.loads((config.output_dir / "run.json").read_text())["complete"] is False
+
+
+def test_bridge_only_preview_keeps_two_independent_empty_quotas(config: Any) -> None:
+    """Catch filling bridge slots with another operator or quietly dropping an inapplicable type."""
+    config = config.model_copy(
+        update={
+            "bridges_only": True,
+            "characters": ("一",),
+            "per_operator": 2,
+            "max_attempts_per_slot": 1,
+        }
+    )
+    result = _module().generate_stroke_preview(config)
+    run = json.loads((config.output_dir / "run.json").read_text())
+    assert run["expected_count"] == 4
+    assert run["by_bridge_mode"] == {"close_opening": 0, "block_gap": 0}
+    assert run["missing_by_bridge_mode"] == {"close_opening": 2, "block_gap": 2}
+    assert not result.complete and result.candidate_count == 0
+    assert all(item["operator"] == "bridge" for item in run["skipped"])
+    assert {item["bridge_mode"] for item in run["skipped"]} == {"close_opening", "block_gap"}
+    assert not list(config.output_dir.rglob("*.parquet"))
+
+
+def test_bridge_only_cli_emits_partial_review_instead_of_running_five_operators(
+    config: Any,
+) -> None:
+    """Catch an unwired bridge flag or accidental legacy five-operator generation."""
+    from typer.testing import CliRunner
+
+    from poor_word.cli import app
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "glyphs",
+            "preview-strokes",
+            "--bridges-only",
+            "--output-dir",
+            str(config.output_dir),
+            "--graphics",
+            str(config.graphics_path),
+            "--source-lock",
+            str(config.source_lock_path),
+            "--license",
+            str(config.license_path),
+            "--characters",
+            "一",
+            "--per-operator",
+            "1",
+            "--max-attempts-per-slot",
+            "1",
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert (config.output_dir / "run.json").is_file(), result.output
+    run = json.loads((config.output_dir / "run.json").read_text())
+    assert run["expected_count"] == 2 and run["candidate_count"] == 0
+    assert run["by_bridge_mode"] == {"close_opening": 0, "block_gap": 0}
+
+
+def test_bridge_specialist_exports_balanced_review_rows_and_provenance(config: Any) -> None:
+    """Catch losing the actual subtype or omitting the new algorithm from artifact provenance."""
+    config = config.model_copy(update={"bridges_only": True})
+    result = _module().generate_stroke_preview(config)
+    assert result.complete and result.candidate_count == 2
+    rows = [json.loads(line) for line in result.candidates_path.read_text().splitlines()]
+    assert {row["bridge_mode"] for row in rows} == {"close_opening", "block_gap"}
+    assert all(row["operator"] == "bridge" for row in rows)
+    assert all(row["decision"] == "REVIEW" and not row["training_eligible"] for row in rows)
+    run = json.loads((config.output_dir / "run.json").read_text())
+    assert run["by_bridge_mode"] == {"close_opening": 1, "block_gap": 1}
+    assert run["missing_by_bridge_mode"] == {"close_opening": 0, "block_gap": 0}
+    assert run["expected_by_bridge_mode"] == {"close_opening": 1, "block_gap": 1}
+    assert "stroke_bridge.py" in run["provenance"]["code_sha256"]
+    for row in rows:
+        with np.load(config.output_dir / row["stroke_archive"]["path"], allow_pickle=False) as data:
+            assert str(data["bridge_mode"]) == row["bridge_mode"]
+    page = result.html_path.read_text()
+    assert "错误封口" in page and "间隙堵塞" in page
+    assert not list(config.output_dir.rglob("*.parquet"))
