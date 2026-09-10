@@ -1,0 +1,35 @@
+{
+  "purpose": "expanded_human_review_not_training",
+  "seed": 2026091017,
+  "source_commit": "01da55a846eaa43432677ab1424a89e48a349222",
+  "excluded_character_count": 59,
+  "excluded_characters": "专丽于估侮冠吨咨奉奏妒季尺带廷徒御托承挺摔斤既晌服架止氓沦活浊涌滑炎炮猎痕瘾皮着砂硝纵缰聆葡薇袖裁躲辉输追逐钠障馈馋馒",
+  "character_pool_count": 3441,
+  "character_pool_sha256_utf8_concatenated": "9a2c0ced5634f6cb41b6840ee0a87f0cf553047cef6c08eee4b239fbdd7a75da",
+  "exclusion_sources": [
+    {
+      "path": "docs/previews/glyph-v2-20260910/candidates.jsonl",
+      "sha256": "fbd59233211ae3088a6ae866057d982ff6e22160287965866f4520c7c9f6ba11"
+    },
+    {
+      "path": "docs/previews/glyph-strokes-20260910/candidates.jsonl",
+      "sha256": "0207240408a0895acd5c006d6bd577802a5f9ea1c2f04ddf96bb5708c63655b6"
+    },
+    {
+      "path": "docs/previews/glyph-bridges-20260910/candidates.jsonl",
+      "sha256": "da598b6b21ceebf68a5356c9f4e2c0c3f8c679a75fff9868fe9753af3a6349e3"
+    }
+  ],
+  "sampling": "Existing generator, random sampling with replacement from the filtered character pool; no manual candidate selection or retries with alternate batch seeds.",
+  "expected_by_operator": {
+    "add_stroke": 20,
+    "break_stroke": 20,
+    "bridge": 20,
+    "component_shift": 20,
+    "erase_segment": 20
+  },
+  "unique_generated_base_characters": 99,
+  "repeated_generated_base_characters": {"落": 2},
+  "labels_imported": false,
+  "training_started": false
+}
