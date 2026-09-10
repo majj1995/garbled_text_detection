@@ -1,0 +1,17 @@
+Noto Serif CJK SC Regular
+
+Copyright notice from the downloaded font's OpenType name table (name ID 0):
+© 2017-2024 Adobe (http://www.adobe.com/).
+
+Font version from the downloaded font's OpenType name table (name ID 5):
+Version 2.003;hotconv 1.1.1;makeotfexe 2.6.0
+
+Official source:
+https://github.com/notofonts/noto-cjk/blob/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf
+
+Official license:
+https://github.com/notofonts/noto-cjk/blob/main/Serif/LICENSE
+
+The unmodified font is distributed under SIL Open Font License 1.1.
+See noto_serif_sc_regular.OFL.txt for the full license.
+Retain this copyright notice and the OFL license when redistributing the font.

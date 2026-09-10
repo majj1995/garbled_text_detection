@@ -11,3 +11,10 @@ url = "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/Simpli
 license_id = "OFL-1.1"
 production_allowed = true
 output_name = "NotoSansCJKsc-Regular.otf"
+
+[[source]]
+source_id = "noto_serif_sc_regular"
+url = "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf"
+license_id = "OFL-1.1"
+production_allowed = true
+output_name = "NotoSerifCJKsc-Regular.otf"
