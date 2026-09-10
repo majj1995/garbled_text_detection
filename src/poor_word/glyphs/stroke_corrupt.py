@@ -18,6 +18,7 @@ from skimage.measure import euler_number
 from skimage.morphology import skeletonize
 
 from poor_word.glyphs.corrupt import OPERATORS, CorruptionNotApplicable
+from poor_word.glyphs.stroke_bridge import BridgePlanner
 
 ByteArray = NDArray[np.uint8]
 BoolArray = NDArray[np.bool_]
@@ -32,6 +33,7 @@ class StrokeCorruptionResult:
     metrics: dict[str, float]
     selected_stroke_indices: tuple[int, ...]
     edited_layers: tuple[ByteArray, ...]
+    bridge_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class _Proposal:
     layers: tuple[ByteArray, ...]
     selected: tuple[int, ...]
     metrics: dict[str, float]
+    bridge_mode: str | None = None
 
 
 def _small(alpha: ByteArray) -> ByteArray:
@@ -272,51 +275,11 @@ def _break(
     )
 
 
-def _bridge(
-    layers: tuple[ByteArray, ...],
-    widths: list[float],
-    scale: float,
-    random: np.random.Generator,
-) -> _Proposal | None:
-    original = np.maximum.reduce(layers)
-    count, regions = cv2.connectedComponents((original >= 128).astype(np.uint8), connectivity=8)
-    if count < 3:
+def _bridge(planner: BridgePlanner, attempt: int, mode: str | None) -> _Proposal | None:
+    proposal = planner.propose(attempt, mode)
+    if proposal is None:
         return None
-    first, second = random.choice(np.arange(1, count), size=2, replace=False)
-    first_points, second_points = np.argwhere(regions == first), np.argwhere(regions == second)
-    start = first_points[random.integers(len(first_points))]
-    # Nearest target to a random source position gives varied, bounded bridges.
-    end = second_points[int(np.argmin(np.sum((second_points - start) ** 2, axis=1)))]
-    length = float(np.linalg.norm(end - start))
-    width = float(np.median(widths))
-    if length < width or length > scale * 0.85:
-        return None
-    alpha = np.zeros_like(original)
-    cv2.line(
-        alpha,
-        (int(start[1]), int(start[0])),
-        (int(end[1]), int(end[0])),
-        (255,),
-        max(2, round(width * 0.85)),
-        lineType=cv2.LINE_AA,
-    )
-    edited = (*layers, alpha)
-    before, after = [_small(np.maximum.reduce(x)) > 8 for x in (layers, edited)]
-    if _topology(after)[0] >= _topology(before)[0]:
-        return None
-    selected = tuple(
-        i for i, layer in enumerate(layers) if layer[tuple(start)] > 0 or layer[tuple(end)] > 0
-    )
-    return _Proposal(
-        edited,
-        selected,
-        {
-            "local_stroke_width": width,
-            "bridge_length": length,
-            "added_stroke_count": 1.0,
-            "input_component_delta": float(_topology(after)[0] - _topology(before)[0]),
-        },
-    )
+    return _Proposal(proposal.layers, proposal.selected, proposal.metrics, proposal.mode)
 
 
 def _visible(original: ByteArray, candidate: ByteArray) -> dict[str, float] | None:
@@ -346,7 +309,7 @@ def _visible(original: ByteArray, candidate: ByteArray) -> dict[str, float] | No
 
 
 def corrupt_stroke_layers(
-    layers: tuple[ByteArray, ...], operator: str, seed: int
+    layers: tuple[ByteArray, ...], operator: str, seed: int, *, bridge_mode: str | None = None
 ) -> StrokeCorruptionResult:
     """Return one geometrically visible REVIEW proposal, or skip after 96 tries.
 
@@ -358,6 +321,10 @@ def corrupt_stroke_layers(
     """
     if operator not in OPERATORS:
         raise ValueError(f"unknown stroke operator: {operator}")
+    if bridge_mode not in (None, "close_opening", "block_gap"):
+        raise ValueError("unknown bridge mode")
+    if bridge_mode is not None and operator != "bridge":
+        raise ValueError("bridge_mode is only supported for bridge")
     if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
         raise ValueError("seed must be a nonnegative integer")
     if not isinstance(layers, tuple) or not layers:
@@ -378,6 +345,7 @@ def corrupt_stroke_layers(
     weights = np.asarray([np.count_nonzero(x >= 128) ** 1.5 for x in layers], dtype=float)
     weights /= weights.sum()
     random = np.random.default_rng(seed)
+    planner = BridgePlanner(layers, widths, scale, seed) if operator == "bridge" else None
     for attempt in range(96):
         index = int(random.choice(len(layers), p=weights))
         if operator == "erase_segment":
@@ -394,7 +362,8 @@ def corrupt_stroke_layers(
         elif operator == "break_stroke":
             proposal = _break(layers, index, widths[index], scale, random)
         else:
-            proposal = _bridge(layers, widths, scale, random)
+            assert planner is not None
+            proposal = _bridge(planner, attempt, bridge_mode)
         if proposal is None:
             continue
         candidate = np.maximum.reduce(proposal.layers)
@@ -415,5 +384,6 @@ def corrupt_stroke_layers(
             },
             selected_stroke_indices=proposal.selected,
             edited_layers=tuple(layer.copy() for layer in proposal.layers),
+            bridge_mode=proposal.bridge_mode,
         )
     raise CorruptionNotApplicable(f"{operator}: no valid stroke-layer proposal after 96 attempts")

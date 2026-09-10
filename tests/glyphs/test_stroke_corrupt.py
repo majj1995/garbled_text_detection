@@ -25,6 +25,14 @@ def _layers() -> tuple[NDArray[np.uint8], ...]:
     )
 
 
+def _bridge_layers() -> tuple[NDArray[np.uint8], ...]:
+    return (
+        _line((28, 25), (28, 100)),
+        _line((28, 100), (99, 100)),
+        _line((99, 100), (99, 25)),
+    )
+
+
 def _input(layer: NDArray[np.uint8], threshold: int = 8) -> NDArray[np.bool_]:
     return cv2.resize(layer, (96, 96), interpolation=cv2.INTER_AREA) > threshold
 
@@ -33,7 +41,7 @@ def _input(layer: NDArray[np.uint8], threshold: int = 8) -> NDArray[np.bool_]:
 def test_operator_preserves_inputs_and_returns_exact_auditable_visible_changes(
     operator: str,
 ) -> None:
-    layers = _layers()
+    layers = _bridge_layers() if operator == "bridge" else _layers()
     originals = tuple(layer.copy() for layer in layers)
     first = corrupt_stroke_layers(layers, operator, 17)
     second = corrupt_stroke_layers(layers, operator, 17)
@@ -134,12 +142,12 @@ def test_break_targets_actual_junction_and_changes_only_one_stroke_layer() -> No
 
 
 def test_bridge_has_an_auditable_added_layer_and_changes_input_topology() -> None:
-    layers = (_line((25, 20), (25, 105)), _line((94, 20), (94, 105)))
+    layers = _bridge_layers()
     result = corrupt_stroke_layers(layers, "bridge", 17)
     assert len(result.edited_layers) > len(layers)
     before = _input(np.maximum.reduce(layers))
     after = _input(result.image[:, :, 0])
-    assert label(after, connectivity=2).max() < label(before, connectivity=2).max()
+    assert label(after, connectivity=2).max() == label(before, connectivity=2).max()
     assert euler_number(after, connectivity=2) < euler_number(before, connectivity=2)
 
 
@@ -219,7 +227,13 @@ def test_shift_skips_when_border_and_width_leave_only_weak_or_clipped_moves() ->
 @pytest.mark.parametrize("size", [32, 64, 192])
 @pytest.mark.parametrize("operator", sorted(OPERATORS))
 def test_resized_layers_keep_visible_training_inputs(size: int, operator: str) -> None:
-    layers = tuple(cv2.resize(x, (size, size), interpolation=cv2.INTER_AREA) for x in _layers())
+    original = _bridge_layers() if operator == "bridge" else _layers()
+    layers = tuple(cv2.resize(x, (size, size), interpolation=cv2.INTER_AREA) for x in original)
+    if operator == "bridge" and size == 32:
+        # Coarse original banks do not support this wide mouth safely.
+        with pytest.raises(CorruptionNotApplicable):
+            corrupt_stroke_layers(layers, operator, 0)
+        return
     result = corrupt_stroke_layers(layers, operator, 0)
     before, after = _input(np.maximum.reduce(layers)), _input(result.image[:, :, 0])
     assert np.count_nonzero(before != after) >= 8
