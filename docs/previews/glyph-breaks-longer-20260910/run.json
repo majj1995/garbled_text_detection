@@ -1,0 +1,47 @@
+{
+  "purpose": "same_site_calibration_not_training_or_independent_evaluation",
+  "generator_version": "stroke-break-longer-v1",
+  "created_date": "2026-09-10",
+  "baseline_count": 20,
+  "candidate_count": 17,
+  "pixel_changed_count": 16,
+  "pixel_unchanged_count": 1,
+  "skipped_count": 3,
+  "length_multiplier": 1.15,
+  "sampling": "archived accepted attempt; earlier valid proposals ignored; no replacement",
+  "baseline_files_sha256": {
+    "candidates.jsonl": "10c7c883489fb2e6f40d2f8271b750ce0d9b9ccd840d9a73cf4d7d3ad72c63a2",
+    "run.json": "a9a573091308c90089fc8841e048781240ecdf8c5da4205fcb5c8b2339c9cefb",
+    "source.json": "c9e1227144c441b16560576f7421b2250cbff0a6a67e1120434b215a231d0535"
+  },
+  "code_sha256": {
+    "stroke_break.py": "378617b9bff86f042c597087c1560bc90cf5f3f5cc0447e4d47665f63e957b16",
+    "stroke_corrupt.py": "f87ce149851b4d4f7d1a8535dbfb9f197090e1690adf6cc84ec34b8601306811",
+    "stroke_preview.py": "ff0678c49650cf202dfa88d8aa4b8503ade8905e21deec781ab466520c1e17c8",
+    "preview_v2.py": "7a058b75f5063c113eed99e98f3b4ce9cfe214366cb719cea3ac90528bac9b01"
+  },
+  "replay_code_sha256": "0196cb58a44aabccfabe3ee0505a2bc4f569ebda29cdcb76ef759a75f582b3fb",
+  "packages": {
+    "numpy": "1.26.4",
+    "pillow": "11.3.0",
+    "opencv-python-headless": "4.11.0.86",
+    "scikit-image": "0.26.0"
+  },
+  "skipped": [
+    {
+      "baseline_candidate_id": "seae1e4a55015",
+      "base_char": "拎",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s835247c09501",
+      "base_char": "叛",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s77fabe811f7a",
+      "base_char": "宝",
+      "reason": "archived_site_failed_unchanged_safety_gates; no replacement"
+    }
+  ]
+}

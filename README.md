@@ -85,7 +85,21 @@ uv run poor-word data fetch --source-id noto_sans_sc_regular
 
 下载内容保存在被 Git 忽略的 `data/raw`，可审计锁文件保存在 `data/locks`。
 
-## 断笔专项预览：当前优先复核这 20 张
+## 最新预览：断笔切口加长 15% 的同位置对照
+
+打开 [新旧对照页](docs/previews/glyph-breaks-longer-20260910/index.html)：
+沿用上批 20 个原字、同一笔画和同一切点，17 张通过原有保护检查
+（16 张实际像素变化，“脖”因栅格化而像素不变，已单独标记）；
+拎、叛、宝加长后未通过检查，保留旧图并标明跳过，不换切点补足。
+仅增加沿笔画方向的切除长度，横向宽度、两段笔画保留门槛和断口净空规则不变。
+15% 指切口长度参数，不代表像素面积或可见间距也恰好增加 15%。
+
+上批人工反馈为 20 张明显异常；新版本仍全部 `REVIEW`，不自动继承判断，不导入训练标签。
+其他四类、旧预览、训练代码和模型均未改动，没有启动实验重训。
+这批是配对校准，不是新的独立评测集。
+[复现说明](docs/previews/glyph-breaks-longer-20260910/reproduce.md) 保留固定尝试重放和跳过记录。
+
+## 保留的 20 张断笔基线：人工反馈均为明显异常
 
 打开 [20 张单笔内部断裂预览](docs/previews/glyph-breaks-20260910/index.html)，
 先独立看修改字，再展开原字、完整笔画和变化 mask。
@@ -104,7 +118,7 @@ uv run poor-word glyphs preview-strokes --breaks-only --per-operator 20 \
 本轮附件使用新随机种子，并排除旧四批预览的来源字。
 20 张来自 20 个不同汉字，共尝试 28 次、跳过 8 次；
 抽样记录和精确复现方式见 [本批说明](docs/previews/glyph-breaks-20260910/reproduce.md)。
-全部仍为 `REVIEW`、`training_eligible=false`，等待人工反馈“明显异常 / 合法可接受 / 不确定”；
+用户已反馈这 20 张均为明显异常；归档文件仍保持 `REVIEW`、`training_eligible=false`，不回写旧记录。
 这不是自动确认的异常训练集，未导入训练标签，也未开始重训。
 其他四类算子、旧预览、训练代码和模型保持不变。
 
