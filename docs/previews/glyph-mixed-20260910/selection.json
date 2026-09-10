@@ -1,0 +1,72 @@
+{
+  "purpose": "five_operator_final_round_human_preview_not_training",
+  "seed": 2026091053,
+  "code_base_commit": "ee04742b62b657843f438055df2c104d327f1709",
+  "actual_code_provenance": "run.json:provenance",
+  "break_length_multiplier_relative_to_original": 2,
+  "strength_feedback": "User accepted the 2x break cut strength; not per-candidate abnormality labels.",
+  "excluded_character_count": 178,
+  "excluded_characters": "专主丽于企伐估佐佑侮偎偏冠况分刷剑县叛司吓吨呕咨哆响哮啃嚷囱圾坯垂堂堰塌奉奏奔妒姑婪孟季宝寸尺展岭己带幼廷徒御忙思怪恤惊惜懈托承拇拎拔拽指挺捆换排插搓摔摧散斤既晌最服朵架查欢止氓氢水沈没沦泻活浊浙涌渊源滑灼炎炮焕煌牡牧猎环班瑰疲痕瘾皮着瞬砂硅硝秀稼窒窟竟篱粥糊系级纬纵纹缔缰聆胳脖莱萝落葡薇蚪蛤蝌蝠融衣袖被裁褐貌赫躲辉输追逐郎酱钉钠钾销锌阔障雇鞋韭馈馋馒鲍",
+  "character_pool_count": 3322,
+  "character_pool_sha256_utf8_concatenated": "2bf4ec70ff1ae99dac3ff42ef268570643752012742166285ea6aa9d35a4fb87",
+  "catalog": {
+    "path": "data/raw/common_chars_3500.txt",
+    "sha256": "4aac5efd4e149898e00829b16394e7c74aa2d78b7382ed2a069cbf69bf188858"
+  },
+  "exclusion_sources": [
+    {
+      "path": "docs/previews/glyph-v2-20260910/candidates.jsonl",
+      "sha256": "fbd59233211ae3088a6ae866057d982ff6e22160287965866f4520c7c9f6ba11"
+    },
+    {
+      "path": "docs/previews/glyph-strokes-20260910/candidates.jsonl",
+      "sha256": "0207240408a0895acd5c006d6bd577802a5f9ea1c2f04ddf96bb5708c63655b6"
+    },
+    {
+      "path": "docs/previews/glyph-bridges-20260910/candidates.jsonl",
+      "sha256": "da598b6b21ceebf68a5356c9f4e2c0c3f8c679a75fff9868fe9753af3a6349e3"
+    },
+    {
+      "path": "docs/previews/glyph-expanded-20260910/candidates.jsonl",
+      "sha256": "84558456bac27c2df066eeda6c0e1172bc10b1d917fd0a9a95a227745604767c"
+    },
+    {
+      "path": "docs/previews/glyph-breaks-20260910/candidates.jsonl",
+      "sha256": "10c7c883489fb2e6f40d2f8271b750ce0d9b9ccd840d9a73cf4d7d3ad72c63a2"
+    },
+    {
+      "path": "docs/previews/glyph-breaks-longer-20260910/candidates.jsonl",
+      "sha256": "c20795c876cfb086e39fa79ba92b56f9cb082b7409c6064064853664f8687020"
+    },
+    {
+      "path": "docs/previews/glyph-breaks-double-20260910/candidates.jsonl",
+      "sha256": "38b15f33a651f0edacb9af0323ef2557e4dddd5dc7001025bbe467bbdc9e1088"
+    }
+  ],
+  "sampling": "Fixed seed; existing random sampling with replacement from the filtered pool; pixel deduplication; shuffled display; no visual cherry-picking or alternate-seed reruns.",
+  "expected_by_operator": {
+    "add_stroke": 20,
+    "break_stroke": 20,
+    "bridge": 20,
+    "component_shift": 20,
+    "erase_segment": 20
+  },
+  "labels_imported": false,
+  "training_started": false,
+  "candidate_count": 100,
+  "unique_generated_base_characters": 100,
+  "repeated_base_characters": {},
+  "attempted_count": 112,
+  "skipped_count": 12,
+  "by_operator": {
+    "add_stroke": 20,
+    "break_stroke": 20,
+    "bridge": 20,
+    "component_shift": 20,
+    "erase_segment": 20
+  },
+  "by_bridge_mode": {
+    "close_opening": 8,
+    "block_gap": 12
+  }
+}
