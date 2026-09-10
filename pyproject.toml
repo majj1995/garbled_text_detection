@@ -5,6 +5,8 @@ description = "AIGC Chinese malformed-glyph detection"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+  "aggdraw>=1.3.19,<2",
+  "fonttools>=4.58,<5",
   "httpx>=0.28,<1",
   "numpy>=1.26,<2",
   "opencv-python-headless>=4.10,<5",
