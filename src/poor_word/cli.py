@@ -19,6 +19,7 @@ from poor_word.evaluation.report import evaluate_glyph_artifacts
 from poor_word.glyphs.catalog import load_common_chars
 from poor_word.glyphs.corrupt import OPERATORS
 from poor_word.glyphs.generate import GenerationConfig, generate_dataset
+from poor_word.glyphs.preview_v2 import PreviewConfig, generate_preview
 from poor_word.ocr.paddle_v5 import PaddleV5Adapter
 from poor_word.real_data.crops import extract_character_crops
 from poor_word.real_data.ingest import import_real_dataset
@@ -182,6 +183,51 @@ def glyphs_generate(
     run_path = _write_run_metadata(config, generation, profile, manifest)
     typer.echo(f"manifest={manifest}")
     typer.echo(f"run={run_path}")
+
+
+@glyphs_app.command("preview-v2")
+def glyphs_preview_v2(
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    fonts: Annotated[list[Path] | None, typer.Option("--font")] = None,
+    characters: Annotated[str | None, typer.Option("--characters")] = None,
+    per_operator: Annotated[int, typer.Option("--per-operator", min=1, max=100)] = 10,
+    max_attempts_per_slot: Annotated[
+        int, typer.Option("--max-attempts-per-slot", min=1, max=1000)
+    ] = 64,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260910,
+) -> None:
+    """Preview scale-aware glyph candidates; REVIEW only, no training or model needed."""
+    paths = PathsConfig()
+    selected_fonts = (
+        tuple(fonts)
+        if fonts
+        else (
+            paths.raw_path / "NotoSansCJKsc-Regular.otf",
+            paths.raw_path / "NotoSerifCJKsc-Regular.otf",
+        )
+    )
+    selected_characters = (
+        tuple(dict.fromkeys(characters))
+        if characters is not None
+        else load_common_chars(paths.raw_path / "common_chars_3500.txt")
+    )
+    try:
+        config = PreviewConfig(
+            output_dir=output_dir,
+            characters=selected_characters,
+            font_paths=selected_fonts,
+            per_operator=per_operator,
+            max_attempts_per_slot=max_attempts_per_slot,
+            seed=seed,
+        )
+        artifacts = generate_preview(config, progress=typer.echo)
+    except (ValueError, FileNotFoundError, FileExistsError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"preview={artifacts.html_path}")
+    typer.echo(f"overview={artifacts.overview_path}")
+    typer.echo(f"candidates={artifacts.candidates_path}")
+    if not artifacts.complete:
+        raise typer.Exit(code=2)
 
 
 @ocr_app.command("audit")
