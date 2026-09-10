@@ -223,8 +223,9 @@ def test_shift_skips_when_border_and_width_leave_only_weak_or_clipped_moves() ->
 def test_resized_layers_keep_visible_training_inputs(size: int, operator: str) -> None:
     original = _bridge_layers() if operator == "bridge" else _layers()
     layers = tuple(cv2.resize(x, (size, size), interpolation=cv2.INTER_AREA) for x in original)
-    if operator in ("bridge", "break_stroke") and size == 32:
-        # These coarse crowded banks cannot support a clear local gap safely.
+    if (operator == "bridge" and size == 32) or (operator == "break_stroke" and size in (32, 64)):
+        # The fixed crowded fixtures exhaust the bounded search safely. At 64px,
+        # the longer break leaves resized bank length 13 < the unchanged 13.5 minimum.
         with pytest.raises(CorruptionNotApplicable):
             corrupt_stroke_layers(layers, operator, 0)
         return

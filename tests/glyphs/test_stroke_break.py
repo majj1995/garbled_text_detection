@@ -8,7 +8,7 @@ import pytest
 from numpy.typing import NDArray
 
 from poor_word.glyphs.corrupt import CorruptionNotApplicable
-from poor_word.glyphs.stroke_break import _parts, _visible_gap
+from poor_word.glyphs.stroke_break import _parts, _visible_gap, propose_break
 from poor_word.glyphs.stroke_corrupt import corrupt_stroke_layers
 
 
@@ -39,6 +39,32 @@ def _part_areas(layer: NDArray[np.uint8], threshold: int) -> list[int]:
         (layer >= threshold).astype(np.uint8), connectivity=8
     )
     return sorted(stats[1:, cv2.CC_STAT_AREA].tolist(), reverse=True)
+
+
+@pytest.mark.parametrize(
+    "top,bottom,left,right",
+    [(47, 49, 69, 76), (44, 53, 35, 54)],
+)
+def test_longer_cut_removes_more_stroke_body_for_thin_and_thick_ink(
+    top: int, bottom: int, left: int, right: int
+) -> None:
+    # Omitting the 15% increase leaves only 5 / 15 blank columns, instead of 7 / 19.
+    # The thin case exercises the minimum cut length, the thick case the width scaling.
+    source = np.zeros((96, 96), np.uint8)
+    source[top:bottom, 5:91] = 255
+    original = source.copy()
+    rest = np.zeros_like(source)
+    result = propose_break(source, rest, np.random.default_rng(0))
+    assert result is not None
+    after, metrics = result
+    expected = original.copy()
+    expected[top:bottom, left:right] = 0
+    np.testing.assert_array_equal(after, expected)
+    np.testing.assert_array_equal(source, original)
+    assert not rest.any()
+    for threshold in (9, 128):
+        assert len(_part_areas(after, threshold)) == 2
+        assert metrics[f"break_visible_gap_96_t{threshold}"] == right - left
 
 
 @pytest.mark.parametrize("character", ["口", "目", "田"])
@@ -75,12 +101,34 @@ def test_long_and_folded_single_strokes_support_interior_breaks_under_transforms
     layer = np.rot90(_stroke(points), turns).copy()
     layer = cv2.warpAffine(layer, np.array([[1.0, 0.0, offset], [0.0, 1.0, offset]]), (128, 128))
     layer = cv2.resize(layer, (size, size), interpolation=cv2.INTER_AREA)
+    if size == 32 and turns == 1 and offset == 5 and len(points) == 2:
+        # The formerly accepted cut now leaves length 5 < 6 at native threshold 9.
+        # This exact coarse short fixture exhausts the bounded search safely.
+        with pytest.raises(CorruptionNotApplicable):
+            corrupt_stroke_layers((layer,), "break_stroke", 17)
+        return
     result = corrupt_stroke_layers((layer,), "break_stroke", 17)
     after = cv2.resize(result.edited_layers[0], (96, 96), interpolation=cv2.INTER_AREA)
     for threshold in (9, 128):
         areas = _part_areas(after, threshold)
         assert len(areas) == 2
         assert min(areas) >= 40
+
+
+@pytest.mark.parametrize("size", [32, 64, 192])
+def test_roomier_low_resolution_strokes_still_support_a_longer_break(size: int) -> None:
+    # A blanket low-resolution rejection would also discard these substantial banks.
+    layers = tuple(
+        cv2.resize(_stroke([(x, 12), (x, 115)]), (size, size), interpolation=cv2.INTER_AREA)
+        for x in (25, 94)
+    )
+    result = corrupt_stroke_layers(layers, "break_stroke", 0)
+    selected = result.selected_stroke_indices[0]
+    after = cv2.resize(result.edited_layers[selected], (96, 96), interpolation=cv2.INTER_AREA)
+    for threshold in (9, 128):
+        assert len(_part_areas(after, threshold)) == 2
+        assert result.metrics[f"break_visible_gap_96_t{threshold}"] >= 3
+    np.testing.assert_array_equal(result.edited_layers[1 - selected], layers[1 - selected])
 
 
 def test_identical_covering_stroke_leaves_no_visible_break_and_is_skipped() -> None:

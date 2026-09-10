@@ -117,7 +117,8 @@ def propose_break(
     _, center, width, tangent = max(candidates, key=lambda x: x[0])
     normal = np.array([-tangent[1], tangent[0]])
     factor = source.shape[0] / 96.0
-    gap = max(width * 1.35, 5 * factor) * float(random.uniform(1.0, 1.3))
+    # Slightly lengthen the interior cut; keep its transverse width and all gates unchanged.
+    gap = max(width * 1.35, 5 * factor) * float(random.uniform(1.0, 1.3)) * 1.15
     yy, xx = np.indices(source.shape)
     offsets = np.stack((yy - center[0], xx - center[1]), axis=-1)
     along, across = offsets @ tangent, offsets @ normal
