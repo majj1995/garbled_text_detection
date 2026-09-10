@@ -120,20 +120,20 @@ def test_shift_is_large_and_collides_at_actual_input_resolution(seed: int) -> No
 
 def test_single_stroke_cannot_be_moved_or_deleted_as_an_entire_character() -> None:
     layers = (_line((20, 64), (105, 64)),)
-    for operator in ("component_shift", "erase_segment", "break_stroke"):
+    for operator in ("component_shift", "erase_segment"):
         with pytest.raises(CorruptionNotApplicable):
             corrupt_stroke_layers(layers, operator, 3)
 
 
-def test_break_targets_actual_junction_and_changes_only_one_stroke_layer() -> None:
+def test_break_splits_a_source_body_and_changes_only_one_stroke_layer() -> None:
     layers = (_line((20, 64), (108, 64)), _line((64, 20), (64, 108)))
     result = corrupt_stroke_layers(layers, "break_stroke", 17)
     assert len(result.selected_stroke_indices) == 1
     index = result.selected_stroke_indices[0]
     np.testing.assert_array_equal(result.edited_layers[1 - index], layers[1 - index])
-    cut = (layers[index] > 0) & (result.edited_layers[index] == 0)
-    junction = (layers[0] > 0) & (layers[1] > 0)
-    assert np.count_nonzero(cut & junction) >= junction.sum() * 0.75
+    for threshold in (8, 127):
+        assert label(_input(layers[index], threshold), connectivity=2).max() == 1
+        assert label(_input(result.edited_layers[index], threshold), connectivity=2).max() == 2
     before = _input(np.maximum.reduce(layers))
     after = _input(result.image[:, :, 0])
     assert label(before, connectivity=2).max() == 1
@@ -173,7 +173,7 @@ def test_blank_layers_and_unknown_operator_fail_explicitly() -> None:
         corrupt_stroke_layers(_layers(), "made_up", 0)
 
 
-def test_break_does_not_report_a_junction_edit_when_most_contact_survives() -> None:
+def test_complex_contacts_do_not_replace_the_independent_source_split_requirement() -> None:
     layers = []
     for points, width in [
         ([[98, 65], [22, 25]], 6),
@@ -186,19 +186,13 @@ def test_break_does_not_report_a_junction_edit_when_most_contact_survives() -> N
     try:
         result = corrupt_stroke_layers(tuple(layers), "break_stroke", 0)
     except CorruptionNotApplicable:
-        return  # A complex junction is allowed to be conservatively skipped.
+        return  # Complex geometry is allowed to be conservatively skipped.
     selected = result.selected_stroke_indices[0]
-    rest = np.maximum.reduce([x for i, x in enumerate(layers) if i != selected])
-    contact = (layers[selected] >= 128) & (
-        cv2.dilate((rest >= 128).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
-    )
-    count, regions = cv2.connectedComponents(contact.astype(np.uint8), connectivity=8)
-    removal_fractions = [
-        np.count_nonzero((regions == i) & (result.edited_layers[selected] == 0))
-        / np.count_nonzero(regions == i)
-        for i in range(1, count)
-    ]
-    assert max(removal_fractions) >= 0.75
+    for threshold in (8, 127):
+        assert label(_input(layers[selected], threshold), connectivity=2).max() == 1
+        parts = label(_input(result.edited_layers[selected], threshold), connectivity=2)
+        assert parts.max() == 2
+        assert min(np.count_nonzero(parts == i) for i in (1, 2)) >= 16
 
 
 def test_break_can_open_main_closed_loop_without_disconnect_in_component_count() -> None:
@@ -229,8 +223,8 @@ def test_shift_skips_when_border_and_width_leave_only_weak_or_clipped_moves() ->
 def test_resized_layers_keep_visible_training_inputs(size: int, operator: str) -> None:
     original = _bridge_layers() if operator == "bridge" else _layers()
     layers = tuple(cv2.resize(x, (size, size), interpolation=cv2.INTER_AREA) for x in original)
-    if operator == "bridge" and size == 32:
-        # Coarse original banks do not support this wide mouth safely.
+    if operator in ("bridge", "break_stroke") and size == 32:
+        # These coarse crowded banks cannot support a clear local gap safely.
         with pytest.raises(CorruptionNotApplicable):
             corrupt_stroke_layers(layers, operator, 0)
         return

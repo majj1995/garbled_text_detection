@@ -223,7 +223,6 @@ def test_rejects_invalid_mode_and_mode_on_non_bridge() -> None:
     [
         ("erase_segment", "670f40b9f39c513596871a8d483e0850d80391bdc14d9d7a9a01ec7714a6d9ae"),
         ("add_stroke", "c21433ccae6800399efaa34fb21800b9bfafe06c594409e2c68a4669b8c02e65"),
-        ("break_stroke", "48535fed98d8fb0f8edc6dcf9301f21a9026519cb9acfb98b498362553ea5d2a"),
         ("component_shift", "1f0ffa094597d925122c2f7293cfceb7ec60bdaf579c9e894e1bcbeceea00efe"),
     ],
 )

@@ -18,6 +18,7 @@ from skimage.measure import euler_number
 from skimage.morphology import skeletonize
 
 from poor_word.glyphs.corrupt import OPERATORS, CorruptionNotApplicable
+from poor_word.glyphs.stroke_break import propose_break
 from poor_word.glyphs.stroke_bridge import BridgePlanner
 
 ByteArray = NDArray[np.uint8]
@@ -218,61 +219,13 @@ def _break(
     scale: float,
     random: np.random.Generator,
 ) -> _Proposal | None:
-    if len(layers) < 2:
+    rest = _rest(layers, index) if len(layers) > 1 else np.zeros_like(layers[index])
+    result = propose_break(layers[index], rest, random)
+    if result is None:
         return None
-    source = layers[index]
-    rest = _rest(layers, index)
-    core = source >= 128
-    # Include one-pixel abutments, but never choose a free-standing segment.
-    contact = core & (cv2.dilate((rest >= 128).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)
-    count, regions, stats, _ = cv2.connectedComponentsWithStats(
-        contact.astype(np.uint8), connectivity=8
-    )
-    if count < 2:
-        return None
-    # Prefer substantial junctions over a tangential contact at a tiny serif tip.
-    order = np.argsort(stats[1:, cv2.CC_STAT_AREA])[::-1] + 1
-    chosen = int(order[int(random.integers(min(3, len(order))))])
-    junction = np.argwhere(regions == chosen)
-    center = junction.mean(axis=0)
-    skeleton = np.argwhere(skeletonize(core)).astype(float)  # type: ignore[no-untyped-call]
-    neighbors = skeleton[np.linalg.norm(skeleton - center, axis=1) <= max(width * 3, scale * 0.18)]
-    if len(neighbors) < 3:
-        return None
-    _, vectors = np.linalg.eigh(np.cov(neighbors, rowvar=False))
-    tangent = vectors[:, -1]
-    normal = np.array([-tangent[1], tangent[0]])
-    overlap_length = float(np.ptp((junction - center) @ tangent)) + 1
-    gap = max(width * 1.2, overlap_length + width * 0.9, scale * 0.07)
-    gap *= float(random.uniform(1.0, 1.35))
-    yy, xx = np.indices(source.shape)
-    offsets = np.stack((yy - center[0], xx - center[1]), axis=-1)
-    cut = (np.abs(offsets @ tangent) <= gap / 2) & (np.abs(offsets @ normal) <= width * 1.1)
-    removed_contact_fraction = float(np.count_nonzero(cut & (regions == chosen)) / len(junction))
-    if removed_contact_fraction < 0.75:
-        return None
-    edited_stroke = source.copy()
-    edited_stroke[cut] = 0
-    if np.count_nonzero(edited_stroke >= 128) < np.count_nonzero(core) * 0.35:
-        return None
+    edited_stroke, metrics = result
     edited = tuple(edited_stroke if i == index else layer for i, layer in enumerate(layers))
-    before, after = [_small(np.maximum.reduce(x)) > 8 for x in (layers, edited)]
-    before_components, before_euler = _topology(before)
-    after_components, after_euler = _topology(after)
-    if not (after_components > before_components or after_euler > before_euler):
-        return None
-    return _Proposal(
-        edited,
-        (index,),
-        {
-            "local_stroke_width": width,
-            "gap_length": gap,
-            "junction_removed_fraction": removed_contact_fraction,
-            "input_component_delta": float(after_components - before_components),
-            "input_euler_delta": float(after_euler - before_euler),
-            "broken_stroke_count": 1.0,
-        },
-    )
+    return _Proposal(edited, (index,), metrics)
 
 
 def _bridge(planner: BridgePlanner, attempt: int, mode: str | None) -> _Proposal | None:
