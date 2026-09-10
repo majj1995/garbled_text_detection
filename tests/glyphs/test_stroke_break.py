@@ -42,19 +42,26 @@ def _part_areas(layer: NDArray[np.uint8], threshold: int) -> list[int]:
 
 
 @pytest.mark.parametrize(
-    "top,bottom,left,right",
-    [(47, 49, 69, 76), (44, 53, 35, 54)],
+    "multiplier,top,bottom,left,right",
+    [
+        (1.0, 47, 49, 70, 75),
+        (1.15, 47, 49, 69, 76),
+        (2.0, 47, 49, 67, 78),
+        (1.0, 44, 53, 37, 52),
+        (1.15, 44, 53, 35, 54),
+        (2.0, 44, 53, 29, 60),
+    ],
 )
-def test_longer_cut_removes_more_stroke_body_for_thin_and_thick_ink(
-    top: int, bottom: int, left: int, right: int
+def test_calibration_strengths_remove_literal_intervals_without_changing_stroke_width(
+    multiplier: float, top: int, bottom: int, left: int, right: int
 ) -> None:
-    # Omitting the 15% increase leaves only 5 / 15 blank columns, instead of 7 / 19.
-    # The thin case exercises the minimum cut length, the thick case the width scaling.
+    # Literal intervals catch applying a factor twice, ignoring it, or changing the RNG/site.
+    # Thin ink exercises the minimum length; thick ink exercises local-width scaling.
     source = np.zeros((96, 96), np.uint8)
     source[top:bottom, 5:91] = 255
     original = source.copy()
     rest = np.zeros_like(source)
-    result = propose_break(source, rest, np.random.default_rng(0))
+    result = propose_break(source, rest, np.random.default_rng(0), length_multiplier=multiplier)
     assert result is not None
     after, metrics = result
     expected = original.copy()
@@ -65,6 +72,31 @@ def test_longer_cut_removes_more_stroke_body_for_thin_and_thick_ink(
     for threshold in (9, 128):
         assert len(_part_areas(after, threshold)) == 2
         assert metrics[f"break_visible_gap_96_t{threshold}"] == right - left
+
+
+@pytest.mark.parametrize("top,bottom,left,right", [(47, 49, 67, 78), (44, 53, 29, 60)])
+def test_default_break_doubles_the_original_cut_not_the_previous_115_percent_cut(
+    top: int, bottom: int, left: int, right: int
+) -> None:
+    source = np.zeros((96, 96), np.uint8)
+    source[top:bottom, 5:91] = 255
+    result = propose_break(source, np.zeros_like(source), np.random.default_rng(0))
+    assert result is not None
+    expected = source.copy()
+    expected[top:bottom, left:right] = 0
+    np.testing.assert_array_equal(result[0], expected)
+
+
+@pytest.mark.parametrize("multiplier", [0.0, -1.0, 0.5, 2.3, float("nan"), float("inf"), True])
+def test_invalid_calibration_strength_is_rejected_before_consuming_randomness(
+    multiplier: float,
+) -> None:
+    source = _stroke([(20, 64), (108, 64)])
+    random = np.random.default_rng(0)
+    initial_state = random.bit_generator.state
+    with pytest.raises(ValueError, match="length_multiplier"):
+        propose_break(source, np.zeros_like(source), random, length_multiplier=multiplier)
+    assert random.bit_generator.state == initial_state
 
 
 @pytest.mark.parametrize("character", ["口", "目", "田"])
@@ -101,12 +133,27 @@ def test_long_and_folded_single_strokes_support_interior_breaks_under_transforms
     layer = np.rot90(_stroke(points), turns).copy()
     layer = cv2.warpAffine(layer, np.array([[1.0, 0.0, offset], [0.0, 1.0, offset]]), (128, 128))
     layer = cv2.resize(layer, (size, size), interpolation=cv2.INTER_AREA)
-    if size == 32 and turns == 1 and offset == 5 and len(points) == 2:
-        # The formerly accepted cut now leaves length 5 < 6 at native threshold 9.
-        # This exact coarse short fixture exhausts the bounded search safely.
+    if size == 32 and len(points) == 2:
+        # The doubled cut leaves a 2--5px bank skeleton below the unchanged 6px
+        # minimum. Keep every transformed version as an explicit protective skip.
         with pytest.raises(CorruptionNotApplicable):
             corrupt_stroke_layers((layer,), "break_stroke", 17)
         return
+    result = corrupt_stroke_layers((layer,), "break_stroke", 17)
+    after = cv2.resize(result.edited_layers[0], (96, 96), interpolation=cv2.INTER_AREA)
+    for threshold in (9, 128):
+        areas = _part_areas(after, threshold)
+        assert len(areas) == 2
+        assert min(areas) >= 40
+
+
+@pytest.mark.parametrize("turns,offset", [(0, 0), (1, 5), (2, -5), (3, 0)])
+def test_roomier_32_pixel_strokes_support_doubled_breaks_under_transforms(
+    turns: int, offset: int
+) -> None:
+    layer = np.rot90(_stroke([(8, 64), (120, 64)]), turns).copy()
+    layer = cv2.warpAffine(layer, np.array([[1.0, 0.0, offset], [0.0, 1.0, offset]]), (128, 128))
+    layer = cv2.resize(layer, (32, 32), interpolation=cv2.INTER_AREA)
     result = corrupt_stroke_layers((layer,), "break_stroke", 17)
     after = cv2.resize(result.edited_layers[0], (96, 96), interpolation=cv2.INTER_AREA)
     for threshold in (9, 128):
@@ -231,7 +278,7 @@ def test_detached_ink_between_banks_cannot_count_as_clear_gap(threshold: int) ->
 
 def test_public_break_does_not_report_bank_distance_as_clearance_over_detached_ink() -> None:
     source = np.zeros((96, 96), np.uint8)
-    source[43:52, 15:81] = 255
+    source[43:52, 5:91] = 255
     rest = np.zeros_like(source)
     rest[43:52, 46:59] = 255
     result = corrupt_stroke_layers((source, rest), "break_stroke", 0)
@@ -248,6 +295,17 @@ def test_public_break_does_not_report_bank_distance_as_clearance_over_detached_i
         assert len(blank_lengths) == 1
         assert blank_lengths[0] >= 3
         assert result.metrics[f"break_visible_gap_96_t{threshold}"] == blank_lengths[0]
+
+
+def test_short_source_around_detached_ink_is_safely_skipped_by_doubled_break() -> None:
+    source = np.zeros((96, 96), np.uint8)
+    source[43:52, 15:81] = 255
+    rest = np.zeros_like(source)
+    rest[43:52, 46:59] = 255
+    # The original fixture now leaves bank skeletons shorter than the unchanged
+    # 15px minimum before its detached-ink clearance can be considered.
+    with pytest.raises(CorruptionNotApplicable):
+        corrupt_stroke_layers((source, rest), "break_stroke", 0)
 
 
 def test_measurements_describe_actual_96_pixel_parts_and_visible_empty_columns() -> None:

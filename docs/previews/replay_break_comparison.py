@@ -29,7 +29,10 @@ VERSION = "stroke-break-longer-v1"
 
 
 def replay_sample(
-    layers: tuple[ByteArray, ...], row: dict[str, Any]
+    layers: tuple[ByteArray, ...],
+    row: dict[str, Any],
+    *,
+    length_multiplier: float = 1.15,
 ) -> StrokeCorruptionResult | None:
     """Keep the archived attempt, selected stroke and center; apply every current gate."""
     attempts = int(row["metrics"]["attempts"])
@@ -47,7 +50,9 @@ def replay_sample(
             if len(layers) > 1
             else np.zeros_like(layers[0])
         )
-        proposal = stroke_break.propose_break(layers[index], rest, random)
+        proposal = stroke_break.propose_break(
+            layers[index], rest, random, length_multiplier=length_multiplier
+        )
     if [index] != row["selected_stroke_indices"]:
         raise ValueError("sampling sequence changed: selected stroke does not match baseline")
     if proposal is None:
@@ -56,8 +61,8 @@ def replay_sample(
     for key in ("break_center_x_96", "break_center_y_96", "local_stroke_width"):
         if metrics[key] != row["metrics"][key]:
             raise ValueError(f"sampling sequence changed: {key} does not match baseline")
-    if not np.isclose(metrics["gap_length"], row["metrics"]["gap_length"] * 1.15):
-        raise ValueError("comparison requires exactly the approved 15% length increase")
+    if not np.isclose(metrics["gap_length"], row["metrics"]["gap_length"] * length_multiplier):
+        raise ValueError("comparison did not preserve the requested cut length ratio")
     after = tuple(edited.copy() if i == index else x.copy() for i, x in enumerate(layers))
     original, candidate = np.maximum.reduce(layers), np.maximum.reduce(after)
     visibility = _visible(original, candidate)

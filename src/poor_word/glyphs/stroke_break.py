@@ -1,5 +1,7 @@
 """Conservative independent-stroke interior breaks; geometry is REVIEW evidence only."""
 
+import math
+
 import cv2
 import numpy as np
 from numpy.typing import NDArray
@@ -87,9 +89,23 @@ def _visible_gap(
 
 
 def propose_break(
-    source: ByteArray, rest: ByteArray, random: np.random.Generator
+    source: ByteArray,
+    rest: ByteArray,
+    random: np.random.Generator,
+    *,
+    length_multiplier: float = 2.0,
 ) -> tuple[ByteArray, dict[str, float]] | None:
-    """One bounded candidate on a selected source stroke, without mutating inputs."""
+    """One bounded candidate; multiplier is relative to the original 1x cut.
+
+    Explicit strengths retain historical calibration replay. The normal sampler
+    uses 2x; transverse width and all acceptance checks remain unchanged.
+    """
+    if (
+        isinstance(length_multiplier, bool)
+        or not math.isfinite(length_multiplier)
+        or not 1.0 <= length_multiplier <= 2.0
+    ):
+        raise ValueError("length_multiplier must be finite and between 1 and 2")
     core = source >= 128
     skeleton = _skeleton(core)
     points = np.argwhere(skeleton).astype(float)
@@ -117,8 +133,8 @@ def propose_break(
     _, center, width, tangent = max(candidates, key=lambda x: x[0])
     normal = np.array([-tangent[1], tangent[0]])
     factor = source.shape[0] / 96.0
-    # Slightly lengthen the interior cut; keep its transverse width and all gates unchanged.
-    gap = max(width * 1.35, 5 * factor) * float(random.uniform(1.0, 1.3)) * 1.15
+    # Scale from the original cut, not cumulatively from a previous calibration.
+    gap = max(width * 1.35, 5 * factor) * float(random.uniform(1.0, 1.3)) * length_multiplier
     yy, xx = np.indices(source.shape)
     offsets = np.stack((yy - center[0], xx - center[1]), axis=-1)
     along, across = offsets @ tangent, offsets @ normal

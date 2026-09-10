@@ -25,6 +25,15 @@ def _layers() -> tuple[NDArray[np.uint8], ...]:
     )
 
 
+def _roomy_break_layers() -> tuple[NDArray[np.uint8], ...]:
+    return (
+        _line((8, 4), (8, 123), 5),
+        _line((119, 4), (119, 123), 5),
+        _line((8, 64), (119, 64), 5),
+        _line((35, 96), (92, 96), 3),
+    )
+
+
 def _bridge_layers() -> tuple[NDArray[np.uint8], ...]:
     return (
         _line((28, 25), (28, 100)),
@@ -41,7 +50,12 @@ def _input(layer: NDArray[np.uint8], threshold: int = 8) -> NDArray[np.bool_]:
 def test_operator_preserves_inputs_and_returns_exact_auditable_visible_changes(
     operator: str,
 ) -> None:
-    layers = _bridge_layers() if operator == "bridge" else _layers()
+    if operator == "bridge":
+        layers = _bridge_layers()
+    elif operator == "break_stroke":
+        layers = _roomy_break_layers()
+    else:
+        layers = _layers()
     originals = tuple(layer.copy() for layer in layers)
     first = corrupt_stroke_layers(layers, operator, 17)
     second = corrupt_stroke_layers(layers, operator, 17)
@@ -126,7 +140,7 @@ def test_single_stroke_cannot_be_moved_or_deleted_as_an_entire_character() -> No
 
 
 def test_break_splits_a_source_body_and_changes_only_one_stroke_layer() -> None:
-    layers = (_line((20, 64), (108, 64)), _line((64, 20), (64, 108)))
+    layers = (_line((8, 64), (120, 64), 7), _line((64, 8), (64, 120), 7))
     result = corrupt_stroke_layers(layers, "break_stroke", 17)
     assert len(result.selected_stroke_indices) == 1
     index = result.selected_stroke_indices[0]
@@ -139,6 +153,12 @@ def test_break_splits_a_source_body_and_changes_only_one_stroke_layer() -> None:
     assert label(before, connectivity=2).max() == 1
     assert label(after, connectivity=2).max() >= 2
     assert after.sum() >= before.sum() * 0.4
+
+
+def test_previous_short_cross_is_safely_skipped_by_doubled_break() -> None:
+    layers = (_line((20, 64), (108, 64)), _line((64, 20), (64, 108)))
+    with pytest.raises(CorruptionNotApplicable):
+        corrupt_stroke_layers(layers, "break_stroke", 17)
 
 
 def test_bridge_has_an_auditable_added_layer_and_changes_input_topology() -> None:
@@ -197,16 +217,27 @@ def test_complex_contacts_do_not_replace_the_independent_source_split_requiremen
 
 def test_break_can_open_main_closed_loop_without_disconnect_in_component_count() -> None:
     layers = (
-        _line((25, 25), (100, 25)),
-        _line((100, 25), (100, 100)),
-        _line((100, 100), (25, 100)),
-        _line((25, 100), (25, 25)),
+        _line((8, 8), (119, 8)),
+        _line((119, 8), (119, 119)),
+        _line((119, 119), (8, 119)),
+        _line((8, 119), (8, 8)),
     )
     result = corrupt_stroke_layers(layers, "break_stroke", 0)
     before, after = _input(np.maximum.reduce(layers)), _input(result.image[:, :, 0])
     assert label(before, connectivity=2).max() == label(after, connectivity=2).max() == 1
     assert euler_number(before, connectivity=2) == 0
     assert euler_number(after, connectivity=2) == 1
+
+
+def test_previous_short_closed_loop_is_safely_skipped_by_doubled_break() -> None:
+    layers = (
+        _line((25, 25), (100, 25)),
+        _line((100, 25), (100, 100)),
+        _line((100, 100), (25, 100)),
+        _line((25, 100), (25, 25)),
+    )
+    with pytest.raises(CorruptionNotApplicable):
+        corrupt_stroke_layers(layers, "break_stroke", 0)
 
 
 def test_shift_skips_when_border_and_width_leave_only_weak_or_clipped_moves() -> None:
@@ -221,17 +252,32 @@ def test_shift_skips_when_border_and_width_leave_only_weak_or_clipped_moves() ->
 @pytest.mark.parametrize("size", [32, 64, 192])
 @pytest.mark.parametrize("operator", sorted(OPERATORS))
 def test_resized_layers_keep_visible_training_inputs(size: int, operator: str) -> None:
-    original = _bridge_layers() if operator == "bridge" else _layers()
+    if operator == "bridge":
+        original = _bridge_layers()
+    elif operator == "break_stroke":
+        original = _roomy_break_layers()
+    else:
+        original = _layers()
     layers = tuple(cv2.resize(x, (size, size), interpolation=cv2.INTER_AREA) for x in original)
-    if (operator == "bridge" and size == 32) or (operator == "break_stroke" and size in (32, 64)):
-        # The fixed crowded fixtures exhaust the bounded search safely. At 64px,
-        # the longer break leaves resized bank length 13 < the unchanged 13.5 minimum.
+    if operator == "bridge" and size == 32:
         with pytest.raises(CorruptionNotApplicable):
             corrupt_stroke_layers(layers, operator, 0)
         return
     result = corrupt_stroke_layers(layers, operator, 0)
     before, after = _input(np.maximum.reduce(layers)), _input(result.image[:, :, 0])
     assert np.count_nonzero(before != after) >= 8
+
+
+def test_previous_native_break_fixture_is_explicitly_skipped() -> None:
+    with pytest.raises(CorruptionNotApplicable):
+        corrupt_stroke_layers(_layers(), "break_stroke", 17)
+
+
+@pytest.mark.parametrize("size", [32, 64, 192])
+def test_previous_resized_break_fixture_is_explicitly_skipped(size: int) -> None:
+    layers = tuple(cv2.resize(x, (size, size), interpolation=cv2.INTER_AREA) for x in _layers())
+    with pytest.raises(CorruptionNotApplicable):
+        corrupt_stroke_layers(layers, "break_stroke", 0)
 
 
 def test_local_rng_does_not_consume_global_numpy_state() -> None:
