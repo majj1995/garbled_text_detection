@@ -161,6 +161,55 @@ uv run poor-word evaluate glyph \
 生成独立训练/holdout 合成集、运行 CPU 测试、在 L20 审计 OCR、训练字形模型，最后生成
 纳入 OCR 审计 JSON 的评估报告。
 
+## 训练后诊断（不重训）
+
+如果低误报下召回不足，使用同一个全局阈值分析五类合成异常、导出错例，并重放训练
+采样以检查同字正样本配对覆盖率。不需要启动 PaddleOCR，不会重新下载预训练权重。
+
+在项目根目录执行；下面使用物理 2 号卡，如使用 3 号卡只改 `CUDA_VISIBLE_DEVICES`：
+
+```bash
+CUDA_VISIBLE_DEVICES=2 uv run poor-word evaluate diagnose-glyph \
+  --manifest data/generated/mvp-holdout/manifest.parquet \
+  --train-manifest data/generated/mvp-v1/manifest.parquet \
+  --artifacts artifacts/glyph-mvp-v1 \
+  --device cuda:0 \
+  --output-dir artifacts/diagnostics-mvp-v1
+```
+
+默认在当前诊断集上选择 `FPR <= 0.0001`（即 0.01%）时召回最高的全局阈值，
+不会按异常类型分别调阈值。可用 `--threshold <完整精度阈值>` 固定阈值；固定阈值即使
+超出 FPR 上限也会原样报告，不会静默换阈值。此处是开发诊断，不能替代独立验收。
+
+输出目录必须是新目录，重跑请使用新名字，避免覆盖已有结果。训练清单会与训练指标和
+原型库来源 SHA-256 对齐，模型、原型库及字符表也会核验。读取图片前会验证路径不越出
+数据目录。推理和原型评分期间会持续打印进度。
+
+主要输出：
+
+- `diagnostics.md`：总体结果、五类异常召回表、训练采样配对覆盖率。
+- `diagnostics.json`：完整诊断配置、指标、来源文件哈希和逐轮配对统计。
+- `scores.parquet`：逐样本原型距离、最近原型字、预测和 TP/FP/TN/FN，保留原始清单字段。
+- `examples/index.md`：可点击的错例原图和掩码索引；原图按字节复制，不做修图。
+- `examples/index.json`：错例来源字、算子、分数、原始路径和图像/掩码 SHA-256。
+- `examples/FN/<operator>/`：默认每类最多 10 张随机漏检样本，固定种子可复现。
+- `examples/FP/`：默认最多 50 张误报，超过上限时按异常分数从高到低导出。
+
+可用 `--examples-per-kind`、`--max-false-positives`、`--seed` 调整抽样。
+FN 掩码白色表示被合成器修改的像素；FP 掩码白色表示正常字前景，不是异常定位。
+来源字只是合成起点，不能当作修改后图像的人工金标。请人工检查漏检图是否仍是合法字、
+是否变成另一个合法字、变换是否过轻，以及是否符合业务异常定义；抽查不能自动估算全量
+标签错误率。
+
+采样重放使用 checkpoint 中的 seed、batch size、epochs/max steps 及训练清单，
+只读取元数据、不读训练图片、不训练模型。`eligible_normal_fraction` 表示正常样本抽取
+次数中，同批存在至少一个同字正常样本的占比；`batches_without_positive_pairs_fraction`
+表示没有任何同字正常配对的批次占比。它不是历史损失日志，也不能独立证明模型学习或
+坍塌。报告对比实际记录步数，跨代码/PyTorch 版本需谨慎解释重放结果。
+
+先查看 `diagnostics.md` 的“按异常类型统计”和“训练采样配对覆盖率”，再打开
+`examples/index.md` 抽查；无需把业务图片或模型传出内网。
+
 ## CPU 质量门禁
 
 ```bash

@@ -12,6 +12,7 @@ import typer
 from poor_word.config import PathsConfig
 from poor_word.data.download import fetch_locked_source, lock_source
 from poor_word.data.manifest import SourceSpec, load_source_lock, load_source_specs
+from poor_word.evaluation.glyph_diagnostics import DiagnosticConfig, diagnose_glyph
 from poor_word.evaluation.oof import collect_oof_scores
 from poor_word.evaluation.real_report import RealSeedReportConfig, evaluate_real_seed
 from poor_word.evaluation.report import evaluate_glyph_artifacts
@@ -462,6 +463,43 @@ def evaluate_glyph_command(
     )
     typer.echo(f"json={report.json_path}")
     typer.echo(f"markdown={report.markdown_path}")
+
+
+@evaluate_app.command("diagnose-glyph")
+def diagnose_glyph_command(
+    manifest: Annotated[Path, typer.Option("--manifest")],
+    train_manifest: Annotated[Path, typer.Option("--train-manifest")],
+    artifacts_dir: Annotated[Path, typer.Option("--artifacts")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    device: Annotated[str, typer.Option("--device")] = "cpu",
+    batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 64,
+    threshold: Annotated[float | None, typer.Option("--threshold")] = None,
+    max_fpr: Annotated[float, typer.Option("--max-fpr", min=0.000000001, max=1)] = 0.0001,
+    examples_per_kind: Annotated[int, typer.Option("--examples-per-kind", min=0)] = 10,
+    max_false_positives: Annotated[int, typer.Option("--max-false-positives", min=0)] = 50,
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260910,
+) -> None:
+    """Diagnose synthetic errors and replay sampler coverage without retraining."""
+    artifacts = diagnose_glyph(
+        DiagnosticConfig(
+            manifest=manifest,
+            train_manifest=train_manifest,
+            artifacts_dir=artifacts_dir,
+            output_dir=output_dir,
+            device=device,
+            batch_size=batch_size,
+            threshold=threshold,
+            max_fpr=max_fpr,
+            examples_per_kind=examples_per_kind,
+            max_false_positives=max_false_positives,
+            seed=seed,
+        ),
+        progress=lambda message: typer.echo(message),
+    )
+    typer.echo(f"json={artifacts.json_path}")
+    typer.echo(f"markdown={artifacts.markdown_path}")
+    typer.echo(f"scores={artifacts.scores_path}")
+    typer.echo(f"examples={artifacts.examples_path}")
 
 
 @evaluate_app.command("real-seed")
