@@ -3,6 +3,7 @@ import json
 import random
 import subprocess
 import time
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from torch.nn import functional as functional
 
 from poor_word.models.glyph_encoder import GlyphEncoder
 from poor_word.models.prototypes import PrototypeBank
+from poor_word.training.augmentation import augmentation_policy
 from poor_word.training.dataset import GlyphDataset, GlyphItem
 from poor_word.training.sampling import build_sampling_run, sampling_counts
 
@@ -37,6 +39,7 @@ class TrainConfig(BaseModel):
     embedding_dim: int = Field(default=256, ge=2)
     sampler: Literal["random", "paired"] = "random"
     allow_experimental: bool = False
+    augmentation: Literal["none", "affine"] = "none"
     log_every: int = Field(default=25, ge=1)
 
 
@@ -219,6 +222,8 @@ def train_glyph(
             raise ValueError("V2 training requires sampler='paired'")
         if dataset.split_role != "train":
             raise ValueError("V2 training requires split_role='train'")
+    elif config.augmentation == "affine":
+        raise ValueError("affine augmentation requires a V2 train manifest")
     elif not train_indices:
         train_indices = tuple(range(len(dataset)))
     if not train_indices:
@@ -239,6 +244,7 @@ def train_glyph(
         max_steps=config.max_steps,
     )
     sample_stats = sampling_counts(dataset.rows, sampling_run.batches)
+    saved_augmentation_policy = augmentation_policy() if config.augmentation == "affine" else None
     config.output_dir.mkdir(parents=True, exist_ok=True)
     progress_path = config.output_dir / "progress.jsonl"
 
@@ -287,12 +293,42 @@ def train_glyph(
     )
 
     history: list[dict[str, float]] = []
+    augmentation_totals: Counter[str] = Counter()
+    augmentation_by_decision: dict[str, Counter[str]] = {}
+    augmentation_rejection_reasons: Counter[str] = Counter()
     step = 0
     last_log = started
     model.train()
     for epoch in sampling_run.epochs:
         for selected in epoch.batches:
-            items = [dataset[index] for index in selected]
+            if config.augmentation == "affine":
+                items = []
+                for position, index in enumerate(selected):
+                    item, trace = dataset.augmented_item(
+                        index,
+                        seed=config.seed,
+                        epoch=epoch.epoch,
+                        step=step,
+                        draw=position,
+                    )
+                    items.append(item)
+                    rejected_attempts = len(trace.rejection_reasons)
+                    counts = augmentation_by_decision.setdefault(item.decision, Counter())
+                    augmentation_totals.update(
+                        draws=1,
+                        applied=int(trace.applied),
+                        fallback=int(not trace.applied),
+                        rejected_attempts=rejected_attempts,
+                    )
+                    counts.update(
+                        draws=1,
+                        applied=int(trace.applied),
+                        fallback=int(not trace.applied),
+                        rejected_attempts=rejected_attempts,
+                    )
+                    augmentation_rejection_reasons.update(trace.rejection_reasons)
+            else:
+                items = [dataset[index] for index in selected]
             views, labels, legal = _batch(items, device)
             embeddings, logits = model(views)
             zero = logits.sum() * 0.0
@@ -325,14 +361,46 @@ def train_glyph(
             step += 1
             now = time.perf_counter()
             if step == 1 or step % config.log_every == 0 or now - last_log >= 30.0:
+                augmentation_progress = (
+                    f" augmentation affine applied={augmentation_totals['applied']} "
+                    f"fallback={augmentation_totals['fallback']}"
+                    if config.augmentation == "affine"
+                    else ""
+                )
                 emit(
                     f"epoch={epoch.epoch} step={step} loss={entry['total']:.6f} "
-                    f"elapsed={now - started:.1f}s",
+                    f"elapsed={now - started:.1f}s{augmentation_progress}",
                     phase="training",
                     epoch=epoch.epoch,
                     **entry,
                 )
                 last_log = now
+
+    augmentation_counts: dict[str, object] = {
+        "draws": augmentation_totals["draws"],
+        "applied": augmentation_totals["applied"],
+        "fallback": augmentation_totals["fallback"],
+        "rejected_attempts": augmentation_totals["rejected_attempts"],
+        "by_decision": {
+            decision: {
+                "draws": counts["draws"],
+                "applied": counts["applied"],
+                "fallback": counts["fallback"],
+                "rejected_attempts": counts["rejected_attempts"],
+            }
+            for decision, counts in sorted(augmentation_by_decision.items())
+        },
+        "rejection_reasons": dict(sorted(augmentation_rejection_reasons.items())),
+    }
+    if config.augmentation == "affine":
+        emit(
+            f"augmentation affine draws={augmentation_totals['draws']} "
+            f"applied={augmentation_totals['applied']} "
+            f"fallback={augmentation_totals['fallback']} "
+            f"rejected_attempts={augmentation_totals['rejected_attempts']}",
+            phase="augmentation_summary",
+            augmentation_counts=augmentation_counts,
+        )
 
     checkpoint = config.output_dir / "encoder.pt"
     checkpoint_part = checkpoint.with_name(f"{checkpoint.name}.part")
@@ -340,6 +408,9 @@ def train_glyph(
         "model_state": model.state_dict(),
         "char_to_id": dataset.char_to_id,
         "config": config.model_dump(mode="json"),
+        "augmentation": config.augmentation,
+        "augmentation_policy": saved_augmentation_policy,
+        "augmentation_counts": augmentation_counts,
         **_dataset_provenance(dataset),
     }
     if dataset.experimental_only:
@@ -415,6 +486,9 @@ def train_glyph(
         "steps": step,
         "cpu_smoke_backbone_frozen": cpu_smoke,
         "sampler": config.sampler,
+        "augmentation": config.augmentation,
+        "augmentation_policy": saved_augmentation_policy,
+        "augmentation_counts": augmentation_counts,
         **_dataset_provenance(dataset),
         **sample_stats,
     }
@@ -435,6 +509,8 @@ def train_glyph(
         ],
         train_synthetic_ood_aucpr=metrics_payload["train_synthetic_ood_aucpr"],
         validation_synthetic_ood_aucpr=metrics_payload["validation_synthetic_ood_aucpr"],
+        augmentation=config.augmentation,
+        augmentation_counts=augmentation_counts,
         **sample_stats,
     )
     return TrainArtifacts(

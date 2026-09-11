@@ -10,12 +10,11 @@
 
 ```bash
 git pull --ff-only origin master
-uv sync --frozen --inexact --python .venv/bin/python
 ```
 
-这里沿用主环境现有 Python，不修改 `.python-version`，也不操作 `environments/ocr`。
-公司内网继续使用你已有的镜像或离线 wheel 配置；缺包时先补齐依赖，不要混装 Paddle 与 PyTorch。
-下方显式选用 `.venv/bin/python` 并禁止重复同步，避免运行时切换已工作的解释器。
+本次依赖未变化，不执行 `uv sync`。这里沿用主环境现有 Python，不修改 `.python-version`，
+也不操作 `environments/ocr`。下方显式选用 `.venv/bin/python` 并禁止重复同步，避免运行时切换
+已工作的解释器。
 所有输出目录必须是新目录；不要覆盖旧训练集和 `glyph-mvp-v1` 模型。
 
 ## 1. 生成 V2 数据
@@ -49,9 +48,11 @@ uv run --no-sync --python .venv/bin/python poor-word glyphs generate-v2 \
 CUDA_VISIBLE_DEVICES=2 uv run --no-sync --python .venv/bin/python poor-word train glyph \
   --manifest data/generated/glyph-v2/train.parquet \
   --sampler paired \
+  --augmentation none \
   --allow-experimental \
   --epochs 20 \
   --batch-size 256 \
+  --seed 20260804 \
   --pretrained \
   --device cuda \
   --log-every 25 \
@@ -67,6 +68,57 @@ CUDA_VISIBLE_DEVICES=2 uv run --no-sync --python .venv/bin/python poor-word trai
 训练会打印阶段、步数和损失；结束后查看 `encoder.pt`、`prototypes.npz`、`metrics.json`。
 原型只来自训练集正常样本，校准和测试样本不参与原型构建。
 训练成员及文件哈希随模型保存，供后续评估验证。
+
+## 2.1 只对训练图启用仿射增强，做 A/B 对照
+
+复用现有 `data/generated/glyph-v2/train.parquet`、`calibration.parquet` 和 `test.parquet`；
+不要重新生成数据、运行 OCR 或新增标注。先用 `nvidia-smi` 确认物理 2 号卡空闲，然后从同一预训练
+权重重新开始训练（不 resume）：
+
+```bash
+CUDA_VISIBLE_DEVICES=2 uv run --no-sync --python .venv/bin/python poor-word train glyph \
+  --manifest data/generated/glyph-v2/train.parquet \
+  --sampler paired \
+  --augmentation affine \
+  --allow-experimental \
+  --epochs 20 \
+  --batch-size 256 \
+  --seed 20260804 \
+  --pretrained \
+  --device cuda \
+  --log-every 25 \
+  --output-dir artifacts/glyph-v2-affine
+```
+
+基线可使用参数相同的现有 `artifacts/glyph-v2`；如果其保存配置不同，则以
+`--augmentation none` 重新配对训练到新目录 `artifacts/glyph-v2-control`，不能称旧结果为严格配对。
+除输出目录和增强模式外，两边保持 `paired`、20 epochs、batch size 256、seed 20260804 和
+pretrained 相同。增强只发生在训练取样；原型拟合、推理和评估都不增强。正常/异常样本使用相同的
+参数提议分布；BLOCK 另有异常编辑可见性保护，因此实际接受率可能不同，需核对按标签记录的应用/
+回退统计，不能据此保证完全没有标签线索。变换先保护字形，再由变换后的灰度图重算三视图、mask
+和边缘。
+
+策略 `glyph-affine-v1` 使用旋转 ±2°、缩放 0.97–1.03，以及每个光栅维度 ±2/128 的平移
+（128 px 时为 ±2 px），最多尝试 4 次。像素级的裁切、前景拓扑及异常编辑可见性守卫拒绝不合格
+候选；全部被拒时保守回退原图，并按标签记录统计。这些守卫不构成语义金标准，也不保证性能提升。
+
+分别把 `artifacts/glyph-v2-affine` 与基线模型代入第 3 节命令，写入两个全新评估目录；例如仿射组为：
+
+```bash
+CUDA_VISIBLE_DEVICES=2 uv run --no-sync --python .venv/bin/python poor-word evaluate glyph-v2 \
+  --calibration-manifest data/generated/glyph-v2/calibration.parquet \
+  --test-manifest data/generated/glyph-v2/test.parquet \
+  --artifacts artifacts/glyph-v2-affine \
+  --allow-experimental --max-fpr 0.0001 --prevalence 0.001 \
+  --device cuda --batch-size 128 \
+  --output-dir artifacts/glyph-v2-affine-eval
+```
+
+基线把 `--artifacts` 换成实际采用的 `artifacts/glyph-v2` 或 `artifacts/glyph-v2-control`，并使用
+对应的全新 `artifacts/glyph-v2-baseline-eval` 输出目录。
+两边都维持 `--max-fpr 0.0001`，但只能用各自校准集正常分数得到各自阈值；不要复用旧的数值阈值。
+比较测试 AUROC/AUCPR、Recall、FPR、TP/FP/TN/FN 和分类型 Recall。由于这套数据已用于开发判断，
+结果只是开发对照，不是新的无偏验收；相同来源的合成评估也不能证明真实业务语义或效果。
 
 ## 3. 校准阈值并评估
 

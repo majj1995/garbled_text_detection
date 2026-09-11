@@ -508,6 +508,7 @@ def _commands(
     max_steps = checkpoint_config.get("max_steps")
     max_steps_option = f" --max-steps {max_steps}" if max_steps is not None else ""
     pretrained_option = "--pretrained" if checkpoint_config["pretrained"] else "--no-pretrained"
+    augmentation = checkpoint_config.get("augmentation", "none")
     cli_training = (
         checkpoint_config.get("learning_rate", 3e-4) == 3e-4
         and checkpoint_config.get("embedding_dim", 256) == 256
@@ -518,7 +519,8 @@ def _commands(
             f"--sampler {checkpoint_config['sampler']} --allow-experimental "
             f"--epochs {checkpoint_config['epochs']}{max_steps_option} "
             f"--batch-size {checkpoint_config['batch_size']} --seed {checkpoint_config['seed']} "
-            f"{pretrained_option} --device {quote(str(checkpoint_config['device']))} "
+            f"{pretrained_option} --augmentation {quote(str(augmentation))} "
+            f"--device {quote(str(checkpoint_config['device']))} "
             f"--log-every {checkpoint_config['log_every']} "
             f"--output-dir {quote(str(fresh_artifacts))}"
         )

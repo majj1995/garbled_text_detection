@@ -385,6 +385,7 @@ def train_glyph_command(
     device: Annotated[str, typer.Option("--device")] = "cuda",
     pretrained: Annotated[bool, typer.Option("--pretrained/--no-pretrained")] = False,
     sampler: Annotated[str, typer.Option("--sampler")] = "random",
+    augmentation: Annotated[str, typer.Option("--augmentation")] = "none",
     allow_experimental: Annotated[bool, typer.Option("--allow-experimental")] = False,
     log_every: Annotated[int, typer.Option("--log-every", min=1)] = 25,
 ) -> None:
@@ -400,6 +401,7 @@ def train_glyph_command(
             pretrained=pretrained,
             device=device,
             sampler=cast(Literal["random", "paired"], sampler),
+            augmentation=cast(Literal["none", "affine"], augmentation),
             allow_experimental=allow_experimental,
             log_every=log_every,
         ),
