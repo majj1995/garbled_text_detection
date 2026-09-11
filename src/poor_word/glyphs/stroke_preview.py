@@ -14,7 +14,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -48,6 +48,7 @@ class StrokePreviewConfig(BaseModel):
     per_operator: int = Field(default=10, ge=1, le=100)
     bridges_only: bool = False  # In this mode per_operator is the quota for each subtype.
     breaks_only: bool = False
+    bridge_mode: Literal["close_opening", "block_gap"] | None = None
     max_attempts_per_slot: int = Field(default=48, ge=1, le=1000)
     seed: int = Field(default=20260910, ge=0)
 
@@ -55,6 +56,8 @@ class StrokePreviewConfig(BaseModel):
     def valid_characters(self) -> "StrokePreviewConfig":
         if self.bridges_only and self.breaks_only:
             raise ValueError("bridges_only and breaks_only are mutually exclusive")
+        if self.bridge_mode is not None and not self.bridges_only:
+            raise ValueError("bridge_mode requires bridges_only")
         if not self.characters or any(len(c) != 1 or c.isspace() for c in self.characters):
             raise ValueError("characters must contain single non-whitespace characters")
         if len(set(self.characters)) != len(self.characters):
@@ -206,7 +209,8 @@ def generate_stroke_preview(
     emit(f"Usable characters={len(records)}; building review candidates...")
     slots: list[tuple[str, str | None]]
     if config.bridges_only:
-        slots = [("bridge", mode) for mode in _BRIDGE_LABELS for _ in range(config.per_operator)]
+        bridge_modes = (config.bridge_mode,) if config.bridge_mode else tuple(_BRIDGE_LABELS)
+        slots = [("bridge", mode) for mode in bridge_modes for _ in range(config.per_operator)]
     elif config.breaks_only:
         slots = [("break_stroke", None) for _ in range(config.per_operator)]
     else:
@@ -371,17 +375,29 @@ def generate_stroke_preview(
                 op: sum(row["operator"] == op for row in rows) for op in sorted(OPERATORS)
             },
             "by_bridge_mode": {
-                mode: sum(row["bridge_mode"] == mode for row in rows) for mode in _BRIDGE_LABELS
+                mode: sum(row["bridge_mode"] == mode for row in rows)
+                for mode in (
+                    ((config.bridge_mode,) if config.bridge_mode else tuple(_BRIDGE_LABELS))
+                    if config.bridges_only
+                    else tuple(_BRIDGE_LABELS)
+                )
             },
             "expected_by_bridge_mode": (
-                {mode: config.per_operator for mode in _BRIDGE_LABELS}
+                {
+                    mode: config.per_operator
+                    for mode in (
+                        (config.bridge_mode,) if config.bridge_mode else tuple(_BRIDGE_LABELS)
+                    )
+                }
                 if config.bridges_only
                 else {}
             ),
             "missing_by_bridge_mode": (
                 {
                     mode: config.per_operator - sum(row["bridge_mode"] == mode for row in rows)
-                    for mode in _BRIDGE_LABELS
+                    for mode in (
+                        (config.bridge_mode,) if config.bridge_mode else tuple(_BRIDGE_LABELS)
+                    )
                 }
                 if config.bridges_only
                 else {}

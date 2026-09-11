@@ -327,6 +327,43 @@ def test_bridge_only_preview_keeps_two_independent_empty_quotas(config: Any) -> 
     assert not list(config.output_dir.rglob("*.parquet"))
 
 
+def test_explicit_bridge_mode_keeps_only_its_requested_quota(config: Any) -> None:
+    """Break caught: one subtype request still allocates hidden slots for the other subtype."""
+    config = config.model_copy(
+        update={
+            "bridges_only": True,
+            "bridge_mode": "block_gap",
+            "characters": ("一",),
+            "per_operator": 2,
+            "max_attempts_per_slot": 1,
+        }
+    )
+
+    result = _module().generate_stroke_preview(config)
+
+    run = json.loads((config.output_dir / "run.json").read_text())
+    assert run["expected_count"] == 2
+    assert run["candidate_count"] == 0
+    assert run["by_bridge_mode"] == {"block_gap": 0}
+    assert run["expected_by_bridge_mode"] == {"block_gap": 2}
+    assert run["missing_by_bridge_mode"] == {"block_gap": 2}
+    assert {item["bridge_mode"] for item in run["skipped"]} == {"block_gap"}
+    assert not result.complete
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"bridge_mode": "block_gap"},
+        {"bridge_mode": "close_opening", "breaks_only": True},
+    ],
+)
+def test_bridge_mode_requires_bridge_specialist(config: Any, override: dict[str, Any]) -> None:
+    """Break caught: a subtype selector is silently ignored by all-operator or break-only runs."""
+    with pytest.raises(ValueError, match="bridges_only"):
+        _module().StrokePreviewConfig.model_validate({**config.model_dump(), **override})
+
+
 def test_bridge_only_cli_emits_partial_review_instead_of_running_five_operators(
     config: Any,
 ) -> None:

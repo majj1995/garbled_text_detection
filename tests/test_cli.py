@@ -11,6 +11,50 @@ from poor_word.ocr.types import OcrAudit
 runner = CliRunner()
 
 
+def test_stroke_preview_cli_delegates_explicit_bridge_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Break caught: --bridge-mode is accepted by Typer but dropped before preview generation."""
+    captured: list[object] = []
+    artifacts = SimpleNamespace(
+        html_path=tmp_path / "index.html",
+        overview_path=tmp_path / "overview.png",
+        candidates_path=tmp_path / "candidates.jsonl",
+        complete=True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "generate_stroke_preview",
+        lambda config, **_kwargs: captured.append(config) or artifacts,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "glyphs",
+            "preview-strokes",
+            "--output-dir",
+            str(tmp_path / "preview"),
+            "--graphics",
+            str(tmp_path / "graphics.txt"),
+            "--source-lock",
+            str(tmp_path / "source.json"),
+            "--license",
+            str(tmp_path / "ARPHICPL.txt"),
+            "--characters",
+            "永",
+            "--bridges-only",
+            "--bridge-mode",
+            "block_gap",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(captured) == 1
+    assert captured[0].bridges_only is True
+    assert captured[0].bridge_mode == "block_gap"
+
+
 def test_data_lock_and_fetch_commands_delegate_to_locked_downloader(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -4,7 +4,7 @@ import platform
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import typer
@@ -251,6 +251,10 @@ def glyphs_preview_strokes(
     breaks_only: Annotated[
         bool, typer.Option("--breaks-only", help="Only interior-stroke break candidates.")
     ] = False,
+    bridge_mode: Annotated[
+        str | None,
+        typer.Option("--bridge-mode", help="Bridge subtype: close_opening or block_gap."),
+    ] = None,
     max_attempts_per_slot: Annotated[
         int, typer.Option("--max-attempts-per-slot", min=1, max=1000)
     ] = 48,
@@ -273,6 +277,7 @@ def glyphs_preview_strokes(
             per_operator=per_operator,
             bridges_only=bridges_only,
             breaks_only=breaks_only,
+            bridge_mode=cast(Literal["close_opening", "block_gap"] | None, bridge_mode),
             max_attempts_per_slot=max_attempts_per_slot,
             seed=seed,
         )
