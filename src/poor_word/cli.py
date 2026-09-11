@@ -13,12 +13,14 @@ from poor_word.config import PathsConfig
 from poor_word.data.download import fetch_locked_source, lock_source
 from poor_word.data.manifest import SourceSpec, load_source_lock, load_source_specs
 from poor_word.evaluation.glyph_diagnostics import DiagnosticConfig, diagnose_glyph
+from poor_word.evaluation.glyph_v2 import evaluate_glyph_v2
 from poor_word.evaluation.oof import collect_oof_scores
 from poor_word.evaluation.real_report import RealSeedReportConfig, evaluate_real_seed
 from poor_word.evaluation.report import evaluate_glyph_artifacts
 from poor_word.glyphs.catalog import load_common_chars
 from poor_word.glyphs.corrupt import OPERATORS
 from poor_word.glyphs.generate import GenerationConfig, generate_dataset
+from poor_word.glyphs.generate_v2 import V2GenerationConfig, generate_v2_dataset
 from poor_word.glyphs.preview_v2 import PreviewConfig, generate_preview
 from poor_word.glyphs.stroke_preview import StrokePreviewConfig, generate_stroke_preview
 from poor_word.ocr.paddle_v5 import PaddleV5Adapter
@@ -186,6 +188,59 @@ def glyphs_generate(
     typer.echo(f"run={run_path}")
 
 
+@glyphs_app.command("generate-v2")
+def glyphs_generate_v2(
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    profile: Annotated[str, typer.Option("--profile")] = "mvp",
+    seed: Annotated[int, typer.Option("--seed", min=0)] = 20260911,
+    allow_experimental: Annotated[bool, typer.Option("--allow-experimental")] = False,
+    graphics: Annotated[Path, typer.Option("--graphics")] = Path(
+        "data/raw/makemeahanzi_graphics.txt"
+    ),
+    source_lock: Annotated[Path, typer.Option("--source-lock")] = Path(
+        "data/locks/makemeahanzi_graphics.lock.json"
+    ),
+    license_path: Annotated[Path, typer.Option("--license")] = Path(
+        "data/licenses/makemeahanzi.ARPHICPL.txt"
+    ),
+) -> None:
+    """Generate separate train/calibration/test sets with the frozen native stroke rules."""
+    if not allow_experimental:
+        raise typer.BadParameter(
+            "V2 is an offline experiment, not production-cleared data; use --allow-experimental"
+        )
+    if profile not in {"smoke", "mvp"}:
+        raise typer.BadParameter("profile must be smoke or mvp", param_hint="--profile")
+    characters = (
+        tuple("永明林国春田合口")
+        if profile == "smoke"
+        else load_common_chars(PathsConfig().raw_path / "common_chars_3500.txt")
+    )
+    try:
+        result = generate_v2_dataset(
+            V2GenerationConfig(
+                output_dir=output_dir,
+                graphics_path=graphics,
+                source_lock_path=source_lock,
+                license_path=license_path,
+                characters=characters,
+                seed=seed,
+                train_normal_per_char=4 if profile == "smoke" else 8,
+                eval_normal_per_char=2 if profile == "smoke" else 4,
+                train_abnormal_per_operator=1 if profile == "smoke" else 2,
+                eval_abnormal_per_operator=1,
+                allow_experimental=allow_experimental,
+            ),
+            progress=typer.echo,
+        )
+    except (ValueError, FileNotFoundError, FileExistsError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"train_manifest={result.train_manifest}")
+    typer.echo(f"calibration_manifest={result.calibration_manifest}")
+    typer.echo(f"test_manifest={result.test_manifest}")
+    typer.echo(f"run={result.run_path}")
+
+
 @glyphs_app.command("preview-v2")
 def glyphs_preview_v2(
     output_dir: Annotated[Path, typer.Option("--output-dir")],
@@ -328,6 +383,9 @@ def train_glyph_command(
     seed: Annotated[int, typer.Option("--seed", min=0)] = 20260804,
     device: Annotated[str, typer.Option("--device")] = "cuda",
     pretrained: Annotated[bool, typer.Option("--pretrained/--no-pretrained")] = False,
+    sampler: Annotated[str, typer.Option("--sampler")] = "random",
+    allow_experimental: Annotated[bool, typer.Option("--allow-experimental")] = False,
+    log_every: Annotated[int, typer.Option("--log-every", min=1)] = 25,
 ) -> None:
     """Train the glyph encoder and build its legal-character prototype bank."""
     artifacts = train_glyph(
@@ -340,7 +398,11 @@ def train_glyph_command(
             seed=seed,
             pretrained=pretrained,
             device=device,
-        )
+            sampler=cast(Literal["random", "paired"], sampler),
+            allow_experimental=allow_experimental,
+            log_every=log_every,
+        ),
+        progress=typer.echo,
     )
     typer.echo(f"checkpoint={artifacts.checkpoint}")
     typer.echo(f"prototypes={artifacts.prototype_bank}")
@@ -546,6 +608,38 @@ def train_mil_oof_command(
     typer.echo(f"image_oof={artifacts.image_oof}")
     typer.echo(f"inventory={artifacts.inventory}")
     typer.echo(f"metrics={artifacts.metrics}")
+
+
+@evaluate_app.command("glyph-v2")
+def evaluate_glyph_v2_command(
+    calibration_manifest: Annotated[Path, typer.Option("--calibration-manifest")],
+    test_manifest: Annotated[Path, typer.Option("--test-manifest")],
+    artifacts_dir: Annotated[Path, typer.Option("--artifacts")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    allow_experimental: Annotated[bool, typer.Option("--allow-experimental")] = False,
+    prevalence: Annotated[float, typer.Option("--prevalence", min=0.000001, max=0.999999)] = 0.001,
+    max_fpr: Annotated[float, typer.Option("--max-fpr", min=0, max=1)] = 0.0001,
+    device: Annotated[str, typer.Option("--device")] = "cpu",
+    batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 64,
+) -> None:
+    """Choose a calibration-normal threshold, then evaluate it unchanged on V2 test data."""
+    try:
+        report = evaluate_glyph_v2(
+            calibration_manifest,
+            test_manifest,
+            artifacts_dir,
+            output_dir,
+            allow_experimental=allow_experimental,
+            prevalence=prevalence,
+            max_fpr=max_fpr,
+            device=device,
+            batch_size=batch_size,
+            progress=typer.echo,
+        )
+    except (ValueError, FileNotFoundError, FileExistsError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"json={report.json_path}")
+    typer.echo(f"markdown={report.markdown_path}")
 
 
 @evaluate_app.command("glyph")

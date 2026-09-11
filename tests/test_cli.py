@@ -147,7 +147,7 @@ def test_ocr_train_and_evaluate_commands_emit_artifact_paths(
         prototype_bank=tmp_path / "prototypes.npz",
         metrics=tmp_path / "metrics.json",
     )
-    monkeypatch.setattr(cli, "train_glyph", lambda _config: train_paths)
+    monkeypatch.setattr(cli, "train_glyph", lambda _config, **_kwargs: train_paths)
     train_result = runner.invoke(
         cli.app,
         [
