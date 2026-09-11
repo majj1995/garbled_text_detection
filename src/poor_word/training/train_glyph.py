@@ -3,8 +3,10 @@ import json
 import random
 import subprocess
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -17,6 +19,7 @@ from torch.nn import functional as functional
 from poor_word.models.glyph_encoder import GlyphEncoder
 from poor_word.models.prototypes import PrototypeBank
 from poor_word.training.dataset import GlyphDataset, GlyphItem
+from poor_word.training.sampling import build_sampling_run, sampling_counts
 
 
 class TrainConfig(BaseModel):
@@ -32,6 +35,9 @@ class TrainConfig(BaseModel):
     device: str = "cuda"
     learning_rate: float = Field(default=3e-4, gt=0)
     embedding_dim: int = Field(default=256, ge=2)
+    sampler: Literal["random", "paired"] = "random"
+    allow_experimental: bool = False
+    log_every: int = Field(default=25, ge=1)
 
 
 @dataclass(frozen=True)
@@ -91,7 +97,11 @@ def _batch(items: list[GlyphItem], device: torch.device) -> tuple[Tensor, Tensor
 
 
 def _embed_dataset(
-    model: GlyphClassifier, dataset: GlyphDataset, device: torch.device, batch_size: int
+    model: GlyphClassifier,
+    dataset: GlyphDataset,
+    device: torch.device,
+    batch_size: int,
+    progress: Callable[[int, int], None] | None = None,
 ) -> NDArray[np.float32]:
     results: list[NDArray[np.float32]] = []
     model.eval()
@@ -102,10 +112,12 @@ def _embed_dataset(
             views = torch.stack([item.views for item in items]).to(device)
             embeddings, _ = model(views)
             results.append(embeddings.cpu().numpy().astype(np.float32))
+            if progress is not None:
+                progress(stop, len(dataset))
     return np.concatenate(results, axis=0).astype(np.float32, copy=False)
 
 
-def _atomic_json(path: Path, payload: dict[str, object]) -> None:
+def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
     part = path.with_name(f"{path.name}.part")
     try:
         part.write_text(
@@ -118,8 +130,80 @@ def _atomic_json(path: Path, payload: dict[str, object]) -> None:
         raise
 
 
-def train_glyph(config: TrainConfig) -> TrainArtifacts:
+def _nearest_accuracy(
+    bank: PrototypeBank,
+    embeddings: NDArray[np.float32],
+    dataset: GlyphDataset,
+    indices: list[int],
+) -> float | None:
+    pass_indices = [index for index in indices if dataset.rows[index]["decision"] == "PASS"]
+    if not pass_indices:
+        return None
+    scores = bank.score(embeddings[pass_indices].astype(np.float32))
+    expected = [str(dataset.rows[index]["base_char"]) for index in pass_indices]
+    return float(
+        np.mean(
+            [
+                actual == target
+                for actual, target in zip(scores.nearest_chars, expected, strict=True)
+            ]
+        )
+    )
+
+
+def _ood_aucpr(
+    bank: PrototypeBank,
+    embeddings: NDArray[np.float32],
+    dataset: GlyphDataset,
+    indices: list[int],
+) -> float | None:
+    if not indices:
+        return None
+    labels = np.asarray(
+        [dataset.rows[index]["decision"] == "BLOCK" for index in indices], dtype=np.int64
+    )
+    if len(np.unique(labels)) != 2:
+        return None
+    scores = bank.score(embeddings[indices].astype(np.float32))
+    return float(average_precision_score(labels, scores.nearest_distance))
+
+
+def _dataset_provenance(dataset: GlyphDataset) -> dict[str, object]:
+    source_ids = sorted(
+        {str(source_id) for row in dataset.rows for source_id in row.get("source_asset_ids", [])}
+    )
+    provenance: dict[str, object] = {"source_asset_ids": source_ids}
+    if dataset.schema_version is not None:
+        provenance["dataset_schema_version"] = dataset.schema_version
+    if dataset.dataset_id is not None:
+        provenance["dataset_id"] = dataset.dataset_id
+    label_provenance = sorted(
+        {str(row["label_provenance"]) for row in dataset.rows if row.get("label_provenance")}
+    )
+    if label_provenance:
+        provenance["label_provenance"] = label_provenance
+    if dataset.run_metadata.get("source_provenance") is not None:
+        provenance["source_provenance"] = dataset.run_metadata["source_provenance"]
+    return provenance
+
+
+def train_glyph(
+    config: TrainConfig, *, progress: Callable[[str], None] | None = None
+) -> TrainArtifacts:
     started = time.perf_counter()
+    output_artifacts = (
+        "encoder.pt",
+        "metrics.json",
+        "prototypes.npz",
+        "prototypes.json",
+        "training_membership.json",
+        "progress.jsonl",
+    )
+    if any((config.output_dir / name).exists() for name in output_artifacts):
+        raise FileExistsError(
+            "training requires a fresh output directory; existing artifacts remain"
+        )
+
     random.seed(config.seed)
     np.random.seed(config.seed)
     torch.manual_seed(config.seed)
@@ -128,8 +212,69 @@ def train_glyph(config: TrainConfig) -> TrainArtifacts:
     device = torch.device(config.device)
     dataset = GlyphDataset(config.manifest)
     train_indices, validation_indices = dataset.split_indices()
-    if not train_indices:
+    if dataset.schema_version is not None:
+        if not config.allow_experimental:
+            raise ValueError("V2 training requires allow_experimental=True")
+        if config.sampler != "paired":
+            raise ValueError("V2 training requires sampler='paired'")
+        if dataset.split_role != "train":
+            raise ValueError("V2 training requires split_role='train'")
+    elif not train_indices:
         train_indices = tuple(range(len(dataset)))
+    if not train_indices:
+        raise ValueError("training split contains no samples")
+    training_decisions = {str(dataset.rows[index]["decision"]) for index in train_indices}
+    if "PASS" not in training_decisions:
+        raise ValueError("training membership must contain PASS samples")
+    if config.sampler == "paired" and "BLOCK" not in training_decisions:
+        raise ValueError("training membership must contain BLOCK samples")
+
+    sampling_run = build_sampling_run(
+        dataset.rows,
+        train_indices,
+        sampler=config.sampler,
+        batch_size=config.batch_size,
+        seed=config.seed,
+        epochs=config.epochs,
+        max_steps=config.max_steps,
+    )
+    sample_stats = sampling_counts(dataset.rows, sampling_run.batches)
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    progress_path = config.output_dir / "progress.jsonl"
+
+    def emit(message: str, **event: Any) -> None:
+        if progress is not None:
+            progress(message)
+        payload = {"message": message, "elapsed_seconds": time.perf_counter() - started, **event}
+        with progress_path.open("a", encoding="utf-8") as stream:
+            stream.write(f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n")
+
+    emit(
+        f"startup device={device} sampler={config.sampler} train_samples={len(train_indices)}",
+        phase="startup",
+        sampler=config.sampler,
+        train_samples=len(train_indices),
+    )
+
+    membership_sha: str | None = None
+    if dataset.schema_version is not None:
+        membership_path = config.output_dir / "training_membership.json"
+        _atomic_json(
+            membership_path,
+            {
+                "schema_version": "glyph-training-membership-v2",
+                "dataset_id": dataset.dataset_id,
+                "manifest_sha256": _sha256(config.manifest),
+                "sample_ids": [str(dataset.rows[index]["sample_id"]) for index in train_indices],
+                "source_group_ids": [
+                    str(dataset.rows[index]["source_group_id"]) for index in train_indices
+                ],
+                "pixel_sha256": [
+                    str(dataset.rows[index]["pixel_sha256"]) for index in train_indices
+                ],
+            },
+        )
+        membership_sha = _sha256(membership_path)
 
     model = GlyphClassifier(len(dataset.char_to_id), config).to(device)
     cpu_smoke = device.type == "cpu" and config.max_steps is not None and config.max_steps <= 2
@@ -143,21 +288,16 @@ def train_glyph(config: TrainConfig) -> TrainArtifacts:
 
     history: list[dict[str, float]] = []
     step = 0
-    generator = torch.Generator().manual_seed(config.seed)
+    last_log = started
     model.train()
-    for _epoch in range(config.epochs):
-        order = torch.randperm(len(train_indices), generator=generator).tolist()
-        for start in range(0, len(order), config.batch_size):
-            batch_order = order[start : start + config.batch_size]
-            selected = [train_indices[order_index] for order_index in batch_order]
+    for epoch in sampling_run.epochs:
+        for selected in epoch.batches:
             items = [dataset[index] for index in selected]
             views, labels, legal = _batch(items, device)
             embeddings, logits = model(views)
             zero = logits.sum() * 0.0
             classification = (
-                functional.cross_entropy(logits[legal], labels[legal])
-                if legal.any()
-                else zero
+                functional.cross_entropy(logits[legal], labels[legal]) if legal.any() else zero
             )
             contrastive = (
                 _supervised_contrastive(embeddings[legal], labels[legal]) if legal.any() else zero
@@ -165,9 +305,7 @@ def train_glyph(config: TrainConfig) -> TrainArtifacts:
             energy = -torch.logsumexp(logits, dim=1)
             if (~legal).any():
                 legal_reference = (
-                    energy[legal].mean().detach()
-                    if legal.any()
-                    else energy.new_tensor(-2.0)
+                    energy[legal].mean().detach() if legal.any() else energy.new_tensor(-2.0)
                 )
                 energy_margin = functional.relu(1.0 - (energy[~legal] - legal_reference)).mean()
             else:
@@ -176,100 +314,128 @@ def train_glyph(config: TrainConfig) -> TrainArtifacts:
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
-            history.append(
-                {
-                    "step": float(step),
-                    "classification": float(classification.detach()),
-                    "contrastive": float(contrastive.detach()),
-                    "energy_margin": float(energy_margin.detach()),
-                    "total": float(loss.detach()),
-                }
-            )
+            entry = {
+                "step": float(step),
+                "classification": float(classification.detach()),
+                "contrastive": float(contrastive.detach()),
+                "energy_margin": float(energy_margin.detach()),
+                "total": float(loss.detach()),
+            }
+            history.append(entry)
             step += 1
-            if config.max_steps is not None and step >= config.max_steps:
-                break
-        if config.max_steps is not None and step >= config.max_steps:
-            break
+            now = time.perf_counter()
+            if step == 1 or step % config.log_every == 0 or now - last_log >= 30.0:
+                emit(
+                    f"epoch={epoch.epoch} step={step} loss={entry['total']:.6f} "
+                    f"elapsed={now - started:.1f}s",
+                    phase="training",
+                    epoch=epoch.epoch,
+                    **entry,
+                )
+                last_log = now
 
-    config.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = config.output_dir / "encoder.pt"
     checkpoint_part = checkpoint.with_name(f"{checkpoint.name}.part")
-    torch.save(
-        {
-            "model_state": model.state_dict(),
-            "char_to_id": dataset.char_to_id,
-            "config": config.model_dump(mode="json"),
-        },
-        checkpoint_part,
-    )
+    checkpoint_payload: dict[str, object] = {
+        "model_state": model.state_dict(),
+        "char_to_id": dataset.char_to_id,
+        "config": config.model_dump(mode="json"),
+        **_dataset_provenance(dataset),
+    }
+    if dataset.experimental_only:
+        checkpoint_payload.update(experimental_only=True, production_allowed=False)
+    if membership_sha is not None:
+        checkpoint_payload["training_membership_sha256"] = membership_sha
+    torch.save(checkpoint_payload, checkpoint_part)
     checkpoint_part.replace(checkpoint)
 
-    embeddings = _embed_dataset(model, dataset, device, min(config.batch_size, 64))
-    pass_indices = [index for index, row in enumerate(dataset.rows) if row["decision"] == "PASS"]
-    if not pass_indices:
-        raise ValueError("training manifest must contain PASS samples")
+    emit("embedding phase started", phase="embedding_start")
+    embeddings = _embed_dataset(
+        model,
+        dataset,
+        device,
+        min(config.batch_size, 64),
+        progress=lambda completed, total: emit(
+            f"embedding samples={completed}/{total}",
+            phase="embedding_progress",
+            completed=completed,
+            total=total,
+        ),
+    )
+    emit(f"embedding phase complete samples={len(dataset)}", phase="embedding_complete")
+    pass_indices = [index for index in train_indices if dataset.rows[index]["decision"] == "PASS"]
+    emit(f"prototype fit started samples={len(pass_indices)}", phase="prototype_fit_start")
     bank = PrototypeBank(random_state=config.seed)
     bank.fit(
         embeddings[pass_indices].astype(np.float32),
         [str(dataset.rows[index]["base_char"]) for index in pass_indices],
     )
+    emit("prototype fit complete", phase="prototype_fit_complete")
     prototype_path = config.output_dir / "prototypes.npz"
-    catalog_hash = hashlib.sha256(
-        "".join(sorted(dataset.char_to_id)).encode("utf-8")
-    ).hexdigest()
-    bank.save(
-        prototype_path,
-        metadata={
-            "catalog_sha256": catalog_hash,
-            "encoder_checkpoint_sha256": _sha256(checkpoint),
-            "source_manifest_sha256": _sha256(config.manifest),
-            "creation_command": "poor-word train glyph",
-        },
-    )
+    catalog_hash = hashlib.sha256("".join(sorted(dataset.char_to_id)).encode("utf-8")).hexdigest()
+    prototype_metadata = {
+        "catalog_sha256": catalog_hash,
+        "encoder_checkpoint_sha256": _sha256(checkpoint),
+        "source_manifest_sha256": _sha256(config.manifest),
+        "creation_command": "poor-word train glyph",
+    }
+    if membership_sha is not None:
+        prototype_metadata["training_membership_sha256"] = membership_sha
+    if dataset.schema_version is not None:
+        prototype_metadata["dataset_schema_version"] = dataset.schema_version
+    if dataset.dataset_id is not None:
+        prototype_metadata["dataset_id"] = dataset.dataset_id
+    if dataset.experimental_only:
+        prototype_metadata["experimental_only"] = "true"
+        prototype_metadata["production_allowed"] = "false"
+    bank.save(prototype_path, metadata=prototype_metadata)
+    if dataset.experimental_only:
+        prototype_metadata["prototype_bank_sha256"] = _sha256(prototype_path)
+        _atomic_json(prototype_path.with_suffix(".json"), prototype_metadata)
 
-    validation_pass = [
-        index
-        for index in validation_indices
-        if dataset.rows[index]["decision"] == "PASS"
-    ]
-    validation_accuracy: float | None = None
-    if validation_pass:
-        scores = bank.score(embeddings[validation_pass].astype(np.float32))
-        expected = [str(dataset.rows[index]["base_char"]) for index in validation_pass]
-        validation_accuracy = float(
-            np.mean(
-                [
-                    actual == target
-                    for actual, target in zip(scores.nearest_chars, expected, strict=True)
-                ]
-            )
-        )
-    all_scores = bank.score(embeddings.astype(np.float32))
-    ood_labels = np.asarray(
-        [row["decision"] == "BLOCK" for row in dataset.rows], dtype=np.int64
-    )
-    ood_aucpr = (
-        float(average_precision_score(ood_labels, all_scores.nearest_distance))
-        if len(np.unique(ood_labels)) == 2
-        else None
-    )
-    lock_path = Path("uv.lock")
+    train_list = list(train_indices)
+    validation_list = list(validation_indices)
+    emit("metric scoring started", phase="metric_scoring_start")
+    metrics_payload: dict[str, object] = {
+        "seed": config.seed,
+        "device": str(device),
+        "git_commit": _git_commit(),
+        "uv_lock_sha256": _sha256(Path("uv.lock")),
+        "manifest_sha256": _sha256(config.manifest),
+        "loss_history": history,
+        "train_nearest_prototype_accuracy": _nearest_accuracy(
+            bank, embeddings, dataset, train_list
+        ),
+        "validation_nearest_prototype_accuracy": _nearest_accuracy(
+            bank, embeddings, dataset, validation_list
+        ),
+        "train_synthetic_ood_aucpr": _ood_aucpr(bank, embeddings, dataset, train_list),
+        "validation_synthetic_ood_aucpr": _ood_aucpr(bank, embeddings, dataset, validation_list),
+        "elapsed_seconds": time.perf_counter() - started,
+        "steps": step,
+        "cpu_smoke_backbone_frozen": cpu_smoke,
+        "sampler": config.sampler,
+        **_dataset_provenance(dataset),
+        **sample_stats,
+    }
+    if dataset.experimental_only:
+        metrics_payload.update(experimental_only=True, production_allowed=False)
+    if membership_sha is not None:
+        metrics_payload["training_membership_sha256"] = membership_sha
     metrics_path = config.output_dir / "metrics.json"
-    _atomic_json(
-        metrics_path,
-        {
-            "seed": config.seed,
-            "device": str(device),
-            "git_commit": _git_commit(),
-            "uv_lock_sha256": _sha256(lock_path),
-            "manifest_sha256": _sha256(config.manifest),
-            "loss_history": history,
-            "validation_nearest_prototype_accuracy": validation_accuracy,
-            "synthetic_ood_aucpr": ood_aucpr,
-            "elapsed_seconds": time.perf_counter() - started,
-            "steps": step,
-            "cpu_smoke_backbone_frozen": cpu_smoke,
-        },
+    _atomic_json(metrics_path, metrics_payload)
+    emit("metric scoring complete", phase="metric_scoring_complete")
+    emit(
+        "training complete",
+        phase="complete",
+        steps=step,
+        train_nearest_prototype_accuracy=metrics_payload["train_nearest_prototype_accuracy"],
+        validation_nearest_prototype_accuracy=metrics_payload[
+            "validation_nearest_prototype_accuracy"
+        ],
+        train_synthetic_ood_aucpr=metrics_payload["train_synthetic_ood_aucpr"],
+        validation_synthetic_ood_aucpr=metrics_payload["validation_synthetic_ood_aucpr"],
+        **sample_stats,
     )
     return TrainArtifacts(
         checkpoint=checkpoint,

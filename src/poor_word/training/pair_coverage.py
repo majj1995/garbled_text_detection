@@ -2,9 +2,8 @@
 
 from collections import Counter
 
-import torch
-
 from poor_word.training.dataset import GlyphDataset
+from poor_word.training.sampling import build_sampling_run, sampling_counts
 from poor_word.training.train_glyph import TrainConfig
 
 
@@ -46,45 +45,26 @@ def audit_pair_coverage(
     if not train_indices:
         train_indices = tuple(range(len(dataset)))
 
-    generator = torch.Generator().manual_seed(config.seed)
+    run = build_sampling_run(
+        dataset.rows,
+        train_indices,
+        sampler=config.sampler,
+        batch_size=config.batch_size,
+        seed=config.seed,
+        epochs=config.epochs,
+        max_steps=config.max_steps,
+    )
     totals: Counter[str] = Counter()
     per_epoch: list[dict[str, object]] = []
     epochs_completed = 0
-    for epoch in range(config.epochs):
-        order = torch.randperm(len(train_indices), generator=generator).tolist()
-        epoch_counts: Counter[str] = Counter()
-        samples_drawn = 0
-        for start in range(0, len(order), config.batch_size):
-            batch_order = order[start : start + config.batch_size]
-            selected = [train_indices[order_index] for order_index in batch_order]
-            normal_counts = Counter(
-                str(dataset.rows[index]["base_char"])
-                for index in selected
-                if str(dataset.rows[index]["decision"]) == "PASS"
-            )
-            positive_pairs = sum(count * (count - 1) // 2 for count in normal_counts.values())
-            batch_counts = {
-                "replayed_steps": 1,
-                "normal_draws": sum(normal_counts.values()),
-                "eligible_normal_draws": sum(
-                    count for count in normal_counts.values() if count >= 2
-                ),
-                "positive_pairs": positive_pairs,
-                "batches_without_positive_pairs": int(positive_pairs == 0),
-            }
-            totals.update(batch_counts)
-            epoch_counts.update(batch_counts)
-            samples_drawn += len(batch_order)
-            if config.max_steps is not None and totals["replayed_steps"] >= config.max_steps:
-                break
-
-        completed = samples_drawn == len(train_indices)
-        epochs_completed += int(completed)
+    for epoch in run.epochs:
+        epoch_counts = Counter(sampling_counts(dataset.rows, epoch.batches))
+        epoch_counts["replayed_steps"] = len(epoch.batches)
+        totals.update(epoch_counts)
+        epochs_completed += int(epoch.completed)
         per_epoch.append(
-            {"epoch": epoch + 1, "completed": completed, **_coverage_fields(epoch_counts)}
+            {"epoch": epoch.epoch, "completed": epoch.completed, **_coverage_fields(epoch_counts)}
         )
-        if config.max_steps is not None and totals["replayed_steps"] >= config.max_steps:
-            break
 
     expected_steps_matches = (
         totals["replayed_steps"] == expected_steps if expected_steps is not None else None

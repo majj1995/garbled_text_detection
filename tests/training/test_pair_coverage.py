@@ -216,3 +216,28 @@ def test_replay_needs_no_pixels_and_returns_json_safe_data(tmp_path: Path) -> No
     assert result["positive_pairs"] == 1
     assert json.loads(json.dumps(result, allow_nan=False)) == result
     assert not config.output_dir.exists()
+
+
+def test_paired_replay_reports_complete_positive_pair_coverage(tmp_path: Path) -> None:
+    dataset = _dataset(
+        tmp_path,
+        [
+            ("甲", "PASS", "0"),
+            ("甲", "PASS", "0"),
+            ("乙", "PASS", "0"),
+            ("乙", "PASS", "0"),
+            ("甲", "BLOCK", "0"),
+            ("乙", "BLOCK", "0"),
+        ],
+    )
+    config = _config(dataset, batch_size=4).model_copy(update={"sampler": "paired"})
+
+    result = audit_pair_coverage(dataset, config, expected_steps=2)
+
+    assert result["replayed_steps"] == 2
+    assert result["normal_draws"] == 4
+    assert result["eligible_normal_draws"] == 4
+    assert result["eligible_normal_fraction"] == 1.0
+    assert result["positive_pairs"] == 2
+    assert result["batches_without_positive_pairs"] == 0
+    assert result["expected_steps_matches"] is True
