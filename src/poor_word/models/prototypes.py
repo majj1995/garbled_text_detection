@@ -62,41 +62,45 @@ class PrototypeBank:
                 )
                 model.fit(character_values)
                 character_centers = model.cluster_centers_
-            normalized_centers = _normalize(
-                np.asarray(character_centers, dtype=np.float32)
-            )
+            normalized_centers = _normalize(np.asarray(character_centers, dtype=np.float32))
             centers.append(normalized_centers)
             center_labels.extend([character] * len(normalized_centers))
 
         self._centers = np.concatenate(centers, axis=0).astype(np.float32, copy=False)
         self._center_labels = tuple(center_labels)
 
-    def score(self, embeddings: FloatArray) -> GlyphScores:
+    def score(self, embeddings: FloatArray, *, batch_size: int = 1024) -> GlyphScores:
         if self._centers is None:
             raise ValueError("prototype bank must be fitted before scoring")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
         values = cast(FloatArray, np.asarray(embeddings, dtype=np.float32))
         if values.ndim != 2 or values.shape[1] != self._centers.shape[1]:
             raise ValueError("score embeddings must have shape [N, prototype_dim]")
         values = _normalize(values)
-        prototype_distances = 1.0 - values @ self._centers.T
-        characters = tuple(sorted(set(self._center_labels)))
-        class_distances = np.column_stack(
-            [
-                prototype_distances[
-                    :, np.asarray(self._center_labels, dtype=object) == character
-                ].min(axis=1)
-                for character in characters
-            ]
-        ).astype(np.float32, copy=False)
-        order = np.argsort(class_distances, axis=1)
-        nearest_indices = order[:, 0]
-        nearest = class_distances[np.arange(len(values)), nearest_indices]
-        if len(characters) > 1:
-            second = class_distances[np.arange(len(values)), order[:, 1]]
-        else:
-            second = np.full(len(values), np.inf, dtype=np.float32)
+        # Group once by character, including banks loaded with interleaved labels.
+        # A bounded row block avoids N_dataset x N_prototypes peak memory, while
+        # reduceat replaces thousands of repeated string masks and column copies.
+        labels = np.asarray(self._center_labels)
+        column_order = np.argsort(labels, kind="stable")
+        characters, starts = np.unique(labels[column_order], return_index=True)
+        centers = self._centers[column_order]
+        nearest = np.empty(len(values), dtype=np.float32)
+        second = np.empty(len(values), dtype=np.float32)
+        nearest_labels: list[str] = []
+        for start in range(0, len(values), batch_size):
+            stop = min(start + batch_size, len(values))
+            distances = 1.0 - np.matmul(values[start:stop], centers.T)
+            class_distances = np.minimum.reduceat(distances, starts, axis=1)
+            order = np.argsort(class_distances, axis=1)
+            row_indices = np.arange(stop - start)
+            nearest[start:stop] = class_distances[row_indices, order[:, 0]]
+            second[start:stop] = (
+                class_distances[row_indices, order[:, 1]] if len(characters) > 1 else np.inf
+            )
+            nearest_labels.extend(str(characters[index]) for index in order[:, 0])
         return GlyphScores(
-            nearest_chars=tuple(characters[int(index)] for index in nearest_indices),
+            nearest_chars=tuple(nearest_labels),
             nearest_distance=nearest.astype(np.float32, copy=False),
             second_distance=second.astype(np.float32, copy=False),
             margin=(second - nearest).astype(np.float32, copy=False),
@@ -144,8 +148,7 @@ class PrototypeBank:
             bank._center_labels = tuple(str(item) for item in payload["center_labels"])
         raw_metadata = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
         if not isinstance(raw_metadata, dict) or not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in raw_metadata.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in raw_metadata.items()
         ):
             raise ValueError("prototype metadata must be a string-to-string object")
         return bank, cast(dict[str, str], raw_metadata)
