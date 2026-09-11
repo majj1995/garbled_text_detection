@@ -26,6 +26,18 @@ def _gap(long: bool = False, wide: bool = False) -> tuple[np.ndarray, ...]:
     return tuple(layers)
 
 
+def _roomy_gap(short: bool = False) -> tuple[np.ndarray, ...]:
+    layers = []
+    first_y, last_y = (50, 66) if short else (43, 84)
+    for x in (42, 62):
+        layer = np.zeros((128, 128), np.uint8)
+        cv2.line(layer, (x, first_y), (x, last_y), 255, 9)
+        layers.append(layer)
+    cv2.line(layers[0], (42, last_y), (42, 106), 255, 9)
+    cv2.line(layers[0], (42, 106), (115, 106), 255, 13)
+    return tuple(layers)
+
+
 def _foreground(image: np.ndarray, threshold: int) -> np.ndarray:
     gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     return cv2.resize(gray, (96, 96), interpolation=cv2.INTER_AREA) >= threshold
@@ -64,7 +76,7 @@ def test_close_opening_encloses_a_large_persistent_region_in_one_connected_u_or_
 
 
 def test_block_gap_consumes_a_substantial_preselected_narrow_passage() -> None:
-    layers = _gap()
+    layers = _roomy_gap()
     result = corrupt_stroke_layers(layers, "bridge", 2, bridge_mode="block_gap")
     assert result.bridge_mode == "block_gap"
     for threshold in (9, 128):
@@ -75,6 +87,12 @@ def test_block_gap_consumes_a_substantial_preselected_narrow_passage() -> None:
         assert np.count_nonzero(after[36:62, 37:42]) >= 26 * 5 * 0.30
     assert result.metrics["blocked_length_fraction"] >= 0.30
     assert result.metrics["gap_consumed_fraction"] >= 0.30
+
+
+@pytest.mark.parametrize("seed", [2, 3])
+def test_block_gap_cannot_overwhelm_the_original_small_two_bar_body(seed: int) -> None:
+    with pytest.raises(CorruptionNotApplicable):
+        corrupt_stroke_layers(_gap(), "bridge", seed, bridge_mode="block_gap")
 
 
 def test_thin_local_banks_are_not_disqualified_by_unrelated_full_glyph_extent() -> None:
@@ -93,14 +111,19 @@ def test_thin_local_banks_are_not_disqualified_by_unrelated_full_glyph_extent() 
 
 
 def test_substantial_gap_swallowing_does_not_require_both_original_ports_to_survive() -> None:
+    result = corrupt_stroke_layers(_roomy_gap(short=True), "bridge", 2, bridge_mode="block_gap")
+    assert result.metrics["blocked_length_fraction"] >= 0.50
+    assert result.metrics["gap_consumed_fraction"] >= 0.50
+
+
+def test_block_gap_cannot_exceed_the_original_short_two_bar_glyph_scale() -> None:
     layers = []
     for x in (42, 62):
         layer = np.zeros((128, 128), np.uint8)
         cv2.line(layer, (x, 50), (x, 66), 255, 9)
         layers.append(layer)
-    result = corrupt_stroke_layers(tuple(layers), "bridge", 2, bridge_mode="block_gap")
-    assert result.metrics["blocked_length_fraction"] >= 0.50
-    assert result.metrics["gap_consumed_fraction"] >= 0.50
+    with pytest.raises(CorruptionNotApplicable):
+        corrupt_stroke_layers(tuple(layers), "bridge", 2, bridge_mode="block_gap")
 
 
 @pytest.mark.parametrize("mode", [None, "close_opening", "block_gap"])
@@ -182,7 +205,7 @@ def test_sloping_continuing_banks_are_not_mistaken_for_mouth_endpoints(seed: int
     assert result.metrics["gate_end_y_96"] <= 25
 
 
-@pytest.mark.parametrize("mode,layers", [("close_opening", _u()), ("block_gap", _gap())])
+@pytest.mark.parametrize("mode,layers", [("close_opening", _u()), ("block_gap", _roomy_gap())])
 def test_each_mode_is_deterministic_and_npz_reconstructs_independent_unchanged_original_layers(
     mode: str,
     layers: tuple[np.ndarray, ...],

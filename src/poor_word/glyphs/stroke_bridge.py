@@ -82,6 +82,43 @@ def _radius(region: BoolArray) -> float:
     return float(cv2.distanceTransform(region.astype(np.uint8), cv2.DIST_L2, 5).max())
 
 
+def _new_solid_region(
+    original: ByteArray, candidate: ByteArray, width: float
+) -> dict[str, float] | None:
+    """Measure new opaque ink over originally blank pixels, at the actual 96px input.
+
+    Old ink and its antialiased edge are excluded. Separate islands cannot pool
+    their areas or bounding boxes into an apparently substantial new region.
+    This is a visibility check, not a prediction that a Chinese glyph is illegal.
+    """
+    new = (original < 9) & (candidate >= 128)
+    # Remove thin whiskers BEFORE measuring extent. One solid dot plus a long
+    # one-pixel tail must not borrow the tail's bounding box to pass as a band.
+    solid = cv2.morphologyEx(new.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(solid, connectivity=8)
+    if count < 2:
+        return None
+    index = int(np.argmax(stats[1:, cv2.CC_STAT_AREA])) + 1
+    area = float(stats[index, cv2.CC_STAT_AREA])
+    region = labels == index
+    length = float(max(stats[index, cv2.CC_STAT_WIDTH], stats[index, cv2.CC_STAT_HEIGHT]))
+    radius = _radius(region)
+    body_area = max(1, int(np.count_nonzero(original >= 128)))
+    if (
+        area < max(32, width**2, body_area * 0.025)
+        or length < max(10, width * 2)
+        or radius < max(1.5, width * 0.35)
+    ):
+        return None
+    return {
+        "new_core_pixels_96": float(new.sum()),
+        "new_solid_area_96": area,
+        "new_solid_length_96": length,
+        "new_solid_radius_96": radius,
+        "new_solid_fraction": area / body_area,
+    }
+
+
 class BridgePlanner:
     """Precompute original gap geometry once; each proposal checks one candidate."""
 
@@ -247,6 +284,37 @@ class BridgePlanner:
             "added_stroke_count": 1.0,
         }
 
+    def _block_alpha(self, gate: _Gate) -> ByteArray | None:
+        """An extended solid band for gap blocking only; closing keeps `_alpha`."""
+        length = max(16.0, gate.right - gate.left + 3.0 * gate.width)
+        thickness = max(4.0, gate.width * 2.0)
+        # Permit overhang beyond both banks, but not a full-canvas stripe or a
+        # clipped patch. The general changed-area/body guard also still applies.
+        if length > max(16.0, min(self.scale, gate.width * 6.0)):
+            return None
+        center = (gate.left + gate.right) / 2
+        endpoints = (center - length / 2, center + length / 2)
+        clearance = thickness / 2 + 2
+        if min(*endpoints, gate.row) < clearance or max(*endpoints, gate.row) > 95 - clearance:
+            return None
+        factor = self.original.shape[0] / 96
+        alpha = np.zeros_like(self.original)
+        points = [
+            (round(across * factor), round(gate.row * factor))
+            if gate.axis == 0
+            else (round(gate.row * factor), round(across * factor))
+            for across in endpoints
+        ]
+        cv2.line(
+            alpha,
+            points[0],
+            points[1],
+            (255,),
+            max(2, round(thickness * factor)),
+            lineType=cv2.LINE_AA,
+        )
+        return alpha
+
     def _close(self, gate: _Gate) -> BridgeProposal | None:
         # Plan with a zero-width mathematical gate on original geometry. This
         # selects an original exterior pocket and its ROI before the actual edit.
@@ -299,8 +367,13 @@ class BridgePlanner:
 
     def _block(self, passage: _Passage) -> BridgeProposal | None:
         gate, region = passage.gate, passage.region
-        alpha = self._alpha(gate, passage.thickness)
+        alpha = self._block_alpha(gate)
+        if alpha is None:
+            return None
         candidate = _small(np.maximum(self.original, alpha))
+        solid = _new_solid_region(self.small, candidate, gate.width)
+        if solid is None:
+            return None
         fractions, lengths = [], []
         for threshold in (9, 128):
             before = (self.small < threshold) & region
@@ -325,6 +398,9 @@ class BridgePlanner:
             lengths.append(length)
         metrics = {
             **self._metrics(gate, region),
+            **solid,
+            "bridge_centerline_length_96": max(16.0, gate.right - gate.left + 3.0 * gate.width),
+            "bridge_thickness_96": max(4.0, gate.width * 2.0),
             "original_gap_area_96": float(region.sum()),
             "gap_consumed_fraction": min(fractions),
             "blocked_length_96": min(lengths),
