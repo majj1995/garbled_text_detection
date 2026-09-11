@@ -92,6 +92,43 @@ CUDA_VISIBLE_DEVICES=2 uv run --no-sync --python .venv/bin/python poor-word eval
 TP/FP/TN/FN 和各异常类型 Recall；另附训练 `metrics.json` 的配对覆盖统计。
 不需要发送公司原始图片。`scores.parquet` 保留逐样本分数，供后续错误分析。
 
+## 4. 只诊断正常字与原型的距离
+
+已有 `artifacts/glyph-v2` 时，可直接运行以下命令，无需重新生成数据、训练或同步依赖。
+先确认物理 2 号卡空闲；`--device cuda` 仍对应可见卡映射后的 `cuda:0`。
+
+```bash
+CUDA_VISIBLE_DEVICES=2 uv run --no-sync --python .venv/bin/python poor-word evaluate diagnose-prototypes \
+  --train-manifest data/generated/glyph-v2/train.parquet \
+  --calibration-manifest data/generated/glyph-v2/calibration.parquet \
+  --artifacts artifacts/glyph-v2 \
+  --characters 发纠留敞晶赣凯色法煤 \
+  --allow-experimental \
+  --device cuda \
+  --batch-size 64 \
+  --output-dir artifacts/glyph-v2-prototype-diagnostics
+```
+
+这一步冻结已有模型，以训练集所选字的 **PASS 正常样本**为原始参考，以校准集所选字的
+**PASS 正常样本**为查询；校准图不会加入参考集或重新拟合原型。不读取 `test.parquet`，
+不重训、不选阈值、不修改评分算法，也不改写原数据、模型、原型或旧评估产物。
+输出必须是原数据及模型目录以外的**新目录**；重复运行请换一个新报告目录。
+
+每张查询图同时比较三项余弦距离（`1 - cosine_similarity`，越小越接近）：
+
+- `global`：到已有完整原型库的最近距离，不限于所选十字；同时报告最近原型所属字。
+- `own_proto`：只到本字已有原型的最近距离。
+- `own_train_nn`：只到本字训练集 PASS 原始样本嵌入的最近距离。
+
+终端每字打印一行：选取该字 **global 分数最高的同一张校准图**，并列出它的三项距离。
+不是分别取三个指标的最大值，也不是把不同图的分数拼在一起。JSON 和 Markdown 报告保留
+每字全部正常查询（标准 V2 数据为 4 张），含样本标识、最近训练样本和参考数量；
+先只需发回终端的 10 行摘要，不需要上传文件或抄录完整报告。
+
+同字原型距离明显大于同字训练近邻距离，可作为原型压缩丢失局部覆盖的线索；两者都大，
+则说明这张校准图在当前嵌入中也远离训练正常样本。它们只是定位证据，不是自动修复或
+重新定阈值的依据；本命令不产生召回率、FPR 或模型改善结论。
+
 ## 只想先验证命令能跑通
 
 第 1 步改用 `--profile smoke`、输出 `data/generated/glyph-v2-smoke`；第 2 步改用对应

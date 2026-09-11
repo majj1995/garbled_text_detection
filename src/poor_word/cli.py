@@ -15,6 +15,7 @@ from poor_word.data.manifest import SourceSpec, load_source_lock, load_source_sp
 from poor_word.evaluation.glyph_diagnostics import DiagnosticConfig, diagnose_glyph
 from poor_word.evaluation.glyph_v2 import evaluate_glyph_v2
 from poor_word.evaluation.oof import collect_oof_scores
+from poor_word.evaluation.prototype_diagnostics import diagnose_prototypes
 from poor_word.evaluation.real_report import RealSeedReportConfig, evaluate_real_seed
 from poor_word.evaluation.report import evaluate_glyph_artifacts
 from poor_word.glyphs.catalog import load_common_chars
@@ -664,6 +665,38 @@ def evaluate_glyph_command(
     )
     typer.echo(f"json={report.json_path}")
     typer.echo(f"markdown={report.markdown_path}")
+
+
+@evaluate_app.command("diagnose-prototypes")
+def diagnose_prototypes_command(
+    train_manifest: Annotated[Path, typer.Option("--train-manifest")],
+    calibration_manifest: Annotated[Path, typer.Option("--calibration-manifest")],
+    artifacts_dir: Annotated[Path, typer.Option("--artifacts")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    characters: Annotated[str, typer.Option("--characters")],
+    device: Annotated[str, typer.Option("--device")] = "cpu",
+    batch_size: Annotated[int, typer.Option("--batch-size", min=1)] = 64,
+    allow_experimental: Annotated[bool, typer.Option("--allow-experimental")] = False,
+) -> None:
+    """Compare frozen prototypes with same-character training normals; no test or tuning."""
+    try:
+        artifacts = diagnose_prototypes(
+            train_manifest=train_manifest,
+            calibration_manifest=calibration_manifest,
+            artifacts_dir=artifacts_dir,
+            output_dir=output_dir,
+            characters=characters,
+            device_name=device,
+            batch_size=batch_size,
+            allow_experimental=allow_experimental,
+            progress=typer.echo,
+        )
+    except (ValueError, FileNotFoundError, FileExistsError) as error:
+        raise typer.BadParameter(str(error)) from error
+    for line in artifacts.summary_lines:
+        typer.echo(line)
+    typer.echo(f"json={artifacts.json_path}")
+    typer.echo(f"markdown={artifacts.markdown_path}")
 
 
 @evaluate_app.command("diagnose-glyph")
