@@ -1,0 +1,92 @@
+{
+  "purpose": "strong_block_gap_human_calibration_not_training",
+  "seed": 2026091107,
+  "code_base_commit": "4714194f62b093a0c025ffcf0f5640cc56a1a284",
+  "actual_code_provenance": "run.json:provenance; code_base_commit is the pre-change baseline, not the final generating source",
+  "changed_operator": "bridge:block_gap",
+  "unchanged_rules": [
+    "bridge:close_opening",
+    "add_stroke",
+    "erase_segment",
+    "component_shift",
+    "break_stroke:original_length_x2"
+  ],
+  "prior_human_feedback": {
+    "preview": "glyph-mixed-20260910",
+    "obvious_anomaly": 95,
+    "acceptable": 5,
+    "uncertain": 0,
+    "acceptable_ids": [
+      "sb361978ba729",
+      "s58b7f878c5b1",
+      "s453475d07331",
+      "sf7cd087529b7",
+      "s4ea729dc042e"
+    ],
+    "labels_imported": false
+  },
+  "excluded_character_count": 278,
+  "excluded_characters": "上专个主丽于企伐估佐佑侥侮促倔值偎偏具冠况分划刷前剑剥剧勃县叛司吓吨呕咨咪哆响哮唧啃嚷囚囱圣圾坯垂堂堰塌奉奏奔妒妮姑娘婪孟季宝实寸尤尺展岭峰峻巡己带幼度廉廷徒御忙思急怪恤恨悦惊惜懈戈成扁手扎托承拇拎拓拔拼拽指挥挺捆捍捕换排掩插搓摔摘摧摸散斤既春晌最服朵板架柄查柿核桌梗欢止殴氓氢水沈没沦泻活派浊浙涌涕渊渐渗源滑澈灼炎炮焕煌燃版牡牧狠狭猎猛环珍班瑰略疲痕瘾皮着瞬矫砂硅硝秀程稼窒窟竟篱粥糊糟系级纬纵纹绿缆缔缚缤缰署羡聆肖胳脖脯莱菜萝萨落葡薇薪蚪蛤蜗蜘蝌蝠融蠢衣袖被裁褐觅诈诬误貌财贴贿赡赫蹦躲轰辉输追逐邻郎酌酱醋钉钙钠钧钾铜销锌错阔防阶障雇鞋韭音顽颅馈馋馒鲍",
+  "character_pool_count": 3222,
+  "character_pool_sha256_utf8_concatenated": "aaba5ea6157b4a8f382844ab9e72e5484ea9bdaa1fd606ad4233e6800bc10e25",
+  "catalog": {
+    "path": "data/raw/common_chars_3500.txt",
+    "sha256": "4aac5efd4e149898e00829b16394e7c74aa2d78b7382ed2a069cbf69bf188858"
+  },
+  "exclusion_sources": [
+    {
+      "path": "docs/previews/glyph-v2-20260910/candidates.jsonl",
+      "sha256": "fbd59233211ae3088a6ae866057d982ff6e22160287965866f4520c7c9f6ba11"
+    },
+    {
+      "path": "docs/previews/glyph-strokes-20260910/candidates.jsonl",
+      "sha256": "0207240408a0895acd5c006d6bd577802a5f9ea1c2f04ddf96bb5708c63655b6"
+    },
+    {
+      "path": "docs/previews/glyph-bridges-20260910/candidates.jsonl",
+      "sha256": "da598b6b21ceebf68a5356c9f4e2c0c3f8c679a75fff9868fe9753af3a6349e3"
+    },
+    {
+      "path": "docs/previews/glyph-expanded-20260910/candidates.jsonl",
+      "sha256": "84558456bac27c2df066eeda6c0e1172bc10b1d917fd0a9a95a227745604767c"
+    },
+    {
+      "path": "docs/previews/glyph-breaks-20260910/candidates.jsonl",
+      "sha256": "10c7c883489fb2e6f40d2f8271b750ce0d9b9ccd840d9a73cf4d7d3ad72c63a2"
+    },
+    {
+      "path": "docs/previews/glyph-breaks-longer-20260910/candidates.jsonl",
+      "sha256": "c20795c876cfb086e39fa79ba92b56f9cb082b7409c6064064853664f8687020"
+    },
+    {
+      "path": "docs/previews/glyph-breaks-double-20260910/candidates.jsonl",
+      "sha256": "38b15f33a651f0edacb9af0323ef2557e4dddd5dc7001025bbe467bbdc9e1088"
+    },
+    {
+      "path": "docs/previews/glyph-mixed-20260910/candidates.jsonl",
+      "sha256": "94a025874eb147dd712c56625786b42914dca7f7e5708d7e7f7f27776f1ee177"
+    }
+  ],
+  "sampling": "Fixed seed; catalog order retained; existing random sampling with replacement, bounded retries and pixel deduplication; shuffled display; no visual cherry-picking or alternate-seed reruns.",
+  "expected_by_bridge_mode": {
+    "block_gap": 20
+  },
+  "labels_imported": false,
+  "training_started": false,
+  "candidate_count": 20,
+  "unique_generated_base_characters": 20,
+  "repeated_base_characters": {},
+  "attempted_count": 209,
+  "skipped_count": 189,
+  "by_operator": {
+    "add_stroke": 0,
+    "break_stroke": 0,
+    "bridge": 20,
+    "component_shift": 0,
+    "erase_segment": 0
+  },
+  "by_bridge_mode": {
+    "block_gap": 20
+  },
+  "missing_count": 0
+}

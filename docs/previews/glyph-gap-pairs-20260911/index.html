@@ -1,0 +1,458 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>间隙堵塞增强 · 同门位对照</title><style>body{font:16px/1.6 system-ui,sans-serif;max-width:760px;margin:32px auto;padding:0 16px;color:#202428;background:#f6f7f8}h1{font-size:25px}h2{font-size:18px}article{padding:18px;background:white;border:1px solid #ddd;margin:16px 0;border-radius:8px}.views{display:flex;gap:16px}figure{margin:8px 0;text-align:center}.skip{width:96px;height:96px;background:#f9eeee;display:grid;place-content:center;color:#8a3030}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}summary{cursor:pointer}</style><h1>间隙堵塞增强 · 同一原始门位</h1><p>固定5个旧门位：2个通过，3个跳过。跳过项不换字、不换笔画、不换门位。</p><p>从左到右为原字、旧堵塞和增强堵塞。新图只在原始 before 笔画层上重放当前 block_gap，并继续使用通用可见性门槛；全部为 REVIEW，不是训练数据。</p><p><a href="overview.png">总览图</a> · <a href="candidates.html">增强候选盲看页</a> · <a href="review-template.jsonl">审阅模板</a> · <a href="pairs.jsonl">配对记录</a> · <a href="run.json">运行记录</a> · <a href="ARPHICPL.txt">Arphic-1999许可</a></p><p>Copyright (C) 1999 Arphic Technology Co., Ltd. 2026-09-11：固定门位生成强度对照；图形衍生物按 Arphic-1999 提供，无担保。</p><article><h2>01 · 猛</h2><div class="views"><figure><img width="96" height="96" src="images/sb361978ba729-original-96.png"><figcaption>原字</figcaption></figure><figure><img width="96" height="96" src="images/sb361978ba729-old-96.png"><figcaption>旧堵塞</figcaption></figure><figure><img width="96" height="96" src="images/s323802e86a1d-candidate_96.png"><figcaption>增强堵塞</figcaption></figure></div><details><summary>固定门位记录</summary><pre>{
+  &quot;baseline_candidate_id&quot;: &quot;sb361978ba729&quot;,
+  &quot;base_char&quot;: &quot;猛&quot;,
+  &quot;seed&quot;: 6587288637587932952,
+  &quot;selected_stroke_indices&quot;: [
+    1,
+    6
+  ],
+  &quot;status&quot;: &quot;accepted&quot;,
+  &quot;candidate_id&quot;: &quot;s323802e86a1d&quot;,
+  &quot;same_site&quot;: true,
+  &quot;archived_site&quot;: {
+    &quot;gate_start_x_96&quot;: 36.0,
+    &quot;gate_start_y_96&quot;: 59.0,
+    &quot;gate_end_x_96&quot;: 42.0,
+    &quot;gate_end_y_96&quot;: 59.0,
+    &quot;gate_width_96&quot;: 5.0,
+    &quot;local_stroke_width_96&quot;: 5.0,
+    &quot;roi_x0_96&quot;: 37.0,
+    &quot;roi_y0_96&quot;: 55.0,
+    &quot;roi_x1_96&quot;: 42.0,
+    &quot;roi_y1_96&quot;: 63.0,
+    &quot;original_gap_length_96&quot;: 8.0,
+    &quot;passage_start_x_96&quot;: 38.0,
+    &quot;passage_start_y_96&quot;: 56.0,
+    &quot;passage_end_x_96&quot;: 39.0,
+    &quot;passage_end_y_96&quot;: 61.0,
+    &quot;selected_stroke_indices&quot;: [
+      1,
+      6
+    ]
+  },
+  &quot;replayed_site&quot;: {
+    &quot;gate_start_x_96&quot;: 36.0,
+    &quot;gate_start_y_96&quot;: 59.0,
+    &quot;gate_end_x_96&quot;: 42.0,
+    &quot;gate_end_y_96&quot;: 59.0,
+    &quot;gate_width_96&quot;: 5.0,
+    &quot;local_stroke_width_96&quot;: 5.0,
+    &quot;roi_x0_96&quot;: 37.0,
+    &quot;roi_y0_96&quot;: 55.0,
+    &quot;roi_x1_96&quot;: 42.0,
+    &quot;roi_y1_96&quot;: 63.0,
+    &quot;original_gap_length_96&quot;: 8.0,
+    &quot;passage_start_x_96&quot;: 38.0,
+    &quot;passage_start_y_96&quot;: 56.0,
+    &quot;passage_end_x_96&quot;: 39.0,
+    &quot;passage_end_y_96&quot;: 61.0,
+    &quot;selected_stroke_indices&quot;: [
+      1,
+      6
+    ]
+  },
+  &quot;baseline_source_sha256&quot;: &quot;a28c478b5178e98f67f510b2d52fde08a69dc664654ef43498253b9b764d46ee&quot;,
+  &quot;baseline_archive_sha256&quot;: &quot;beb52559000b8e472435813bbcf45bd47fa56a699ce88ab52bfc936195ece680&quot;,
+  &quot;baseline_original_96_sha256&quot;: &quot;12fb68fa2c6cd28a117d1cf2821a5b2b50e40c0471c88f2c5a266072ab583787&quot;,
+  &quot;baseline_old_96_sha256&quot;: &quot;4fb569854b44d1c91883ee12fd56132855eb8ec6f2bd935f6c598b7d7ce0e878&quot;,
+  &quot;baseline_pixel_sha256&quot;: &quot;263d14893949dbcdeccceb32632b01334ceb01ccf6d5cf6766596fa8ea297bec&quot;,
+  &quot;files&quot;: {
+    &quot;original_96&quot;: {
+      &quot;path&quot;: &quot;images/sb361978ba729-original-96.png&quot;,
+      &quot;sha256&quot;: &quot;12fb68fa2c6cd28a117d1cf2821a5b2b50e40c0471c88f2c5a266072ab583787&quot;
+    },
+    &quot;old_96&quot;: {
+      &quot;path&quot;: &quot;images/sb361978ba729-old-96.png&quot;,
+      &quot;sha256&quot;: &quot;4fb569854b44d1c91883ee12fd56132855eb8ec6f2bd935f6c598b7d7ce0e878&quot;
+    },
+    &quot;old_mask_96&quot;: {
+      &quot;path&quot;: &quot;images/sb361978ba729-old-mask-96.png&quot;,
+      &quot;sha256&quot;: &quot;6d12762c98d3901a073cbdb892154489130ddec198576becc68d40c1c3981c5f&quot;
+    },
+    &quot;new_96&quot;: {
+      &quot;path&quot;: &quot;images/s323802e86a1d-candidate_96.png&quot;,
+      &quot;sha256&quot;: &quot;10c878c4fe975ef7c61ca4d7722b140e106d25a0cfe225d86939085d25e887e9&quot;
+    },
+    &quot;new_mask_96&quot;: {
+      &quot;path&quot;: &quot;images/s323802e86a1d-mask_96.png&quot;,
+      &quot;sha256&quot;: &quot;755b9e42a2bfe353899e9475d03b802f80767e29c220f7bb4843a78b417dce5f&quot;
+    }
+  },
+  &quot;pixel_sha256&quot;: &quot;202534ff8f46ddd7582a1aa662f2830a2ce74547feddcd045fe817a390828d4a&quot;,
+  &quot;pixel_changed&quot;: true,
+  &quot;metrics&quot;: {
+    &quot;roi_x0_96&quot;: 37.0,
+    &quot;roi_y0_96&quot;: 55.0,
+    &quot;roi_x1_96&quot;: 42.0,
+    &quot;roi_y1_96&quot;: 63.0,
+    &quot;gate_start_x_96&quot;: 36.0,
+    &quot;gate_start_y_96&quot;: 59.0,
+    &quot;gate_end_x_96&quot;: 42.0,
+    &quot;gate_end_y_96&quot;: 59.0,
+    &quot;local_stroke_width_96&quot;: 5.0,
+    &quot;local_stroke_width&quot;: 6.666666666666667,
+    &quot;gate_width_96&quot;: 5.0,
+    &quot;added_stroke_count&quot;: 1.0,
+    &quot;new_core_pixels_96&quot;: 125.0,
+    &quot;new_solid_area_96&quot;: 62.0,
+    &quot;new_solid_length_96&quot;: 11.0,
+    &quot;new_solid_radius_96&quot;: 3.59689998626709,
+    &quot;new_solid_fraction&quot;: 0.043447792571829014,
+    &quot;bridge_centerline_length_96&quot;: 21.0,
+    &quot;bridge_thickness_96&quot;: 10.0,
+    &quot;original_gap_area_96&quot;: 34.0,
+    &quot;gap_consumed_fraction&quot;: 1.0,
+    &quot;blocked_length_96&quot;: 8.0,
+    &quot;original_gap_length_96&quot;: 8.0,
+    &quot;blocked_length_fraction&quot;: 1.0,
+    &quot;passage_start_x_96&quot;: 38.0,
+    &quot;passage_start_y_96&quot;: 56.0,
+    &quot;passage_end_x_96&quot;: 39.0,
+    &quot;passage_end_y_96&quot;: 61.0,
+    &quot;changed_fraction&quot;: 0.16915584415584414,
+    &quot;input_changed_fraction&quot;: 0.1836019621583742,
+    &quot;input_changed_pixels&quot;: 262.0,
+    &quot;input_foreground_changed_pixels&quot;: 162.0,
+    &quot;input_edge_changed_pixels&quot;: 123.0,
+    &quot;glyph_scale&quot;: 96.0,
+    &quot;attempts&quot;: 2.0
+  }
+}</pre></details></article><article><h2>02 · 蠢</h2><div class="views"><figure><img width="96" height="96" src="images/s58b7f878c5b1-original-96.png"><figcaption>原字</figcaption></figure><figure><img width="96" height="96" src="images/s58b7f878c5b1-old-96.png"><figcaption>旧堵塞</figcaption></figure><figure><div class="skip">SKIP<br>不替换</div><figcaption>增强堵塞</figcaption></figure></div><details><summary>固定门位记录</summary><pre>{
+  &quot;baseline_candidate_id&quot;: &quot;s58b7f878c5b1&quot;,
+  &quot;base_char&quot;: &quot;蠢&quot;,
+  &quot;seed&quot;: 2311721455213994015,
+  &quot;selected_stroke_indices&quot;: [
+    0,
+    1
+  ],
+  &quot;status&quot;: &quot;skipped&quot;,
+  &quot;candidate_id&quot;: null,
+  &quot;same_site&quot;: true,
+  &quot;archived_site&quot;: {
+    &quot;gate_start_x_96&quot;: 51.0,
+    &quot;gate_start_y_96&quot;: 22.0,
+    &quot;gate_end_x_96&quot;: 51.0,
+    &quot;gate_end_y_96&quot;: 26.0,
+    &quot;gate_width_96&quot;: 3.0,
+    &quot;local_stroke_width_96&quot;: 4.0,
+    &quot;roi_x0_96&quot;: 45.0,
+    &quot;roi_y0_96&quot;: 22.0,
+    &quot;roi_x1_96&quot;: 58.0,
+    &quot;roi_y1_96&quot;: 27.0,
+    &quot;original_gap_length_96&quot;: 13.0,
+    &quot;passage_start_x_96&quot;: 46.0,
+    &quot;passage_start_y_96&quot;: 25.0,
+    &quot;passage_end_x_96&quot;: 56.0,
+    &quot;passage_end_y_96&quot;: 23.0,
+    &quot;selected_stroke_indices&quot;: [
+      0,
+      1
+    ]
+  },
+  &quot;replayed_site&quot;: {
+    &quot;gate_start_x_96&quot;: 51.0,
+    &quot;gate_start_y_96&quot;: 22.0,
+    &quot;gate_end_x_96&quot;: 51.0,
+    &quot;gate_end_y_96&quot;: 26.0,
+    &quot;gate_width_96&quot;: 3.0,
+    &quot;local_stroke_width_96&quot;: 4.0,
+    &quot;roi_x0_96&quot;: 45.0,
+    &quot;roi_y0_96&quot;: 22.0,
+    &quot;roi_x1_96&quot;: 58.0,
+    &quot;roi_y1_96&quot;: 27.0,
+    &quot;original_gap_length_96&quot;: 13.0,
+    &quot;passage_start_x_96&quot;: 46.0,
+    &quot;passage_start_y_96&quot;: 25.0,
+    &quot;passage_end_x_96&quot;: 56.0,
+    &quot;passage_end_y_96&quot;: 23.0,
+    &quot;selected_stroke_indices&quot;: [
+      0,
+      1
+    ]
+  },
+  &quot;baseline_source_sha256&quot;: &quot;a28c478b5178e98f67f510b2d52fde08a69dc664654ef43498253b9b764d46ee&quot;,
+  &quot;baseline_archive_sha256&quot;: &quot;3e292c658eb06080aa46891a1fab575eb864f718e5d84ed6b1c984172656e16f&quot;,
+  &quot;baseline_original_96_sha256&quot;: &quot;abe5068219d4eafbd26ca1eadf61ad9856be678f95080c9056d784d007aa4d46&quot;,
+  &quot;baseline_old_96_sha256&quot;: &quot;14bc9f44c74c7e1bc3349e5918c85b316cd3d2c4b1c7de23be0c6ab5168b0dc2&quot;,
+  &quot;baseline_pixel_sha256&quot;: &quot;1d3890ae3e13bc47ce47e3912b22159a3f0d189cc8a8f2fd362202f8f1fb8229&quot;,
+  &quot;files&quot;: {
+    &quot;original_96&quot;: {
+      &quot;path&quot;: &quot;images/s58b7f878c5b1-original-96.png&quot;,
+      &quot;sha256&quot;: &quot;abe5068219d4eafbd26ca1eadf61ad9856be678f95080c9056d784d007aa4d46&quot;
+    },
+    &quot;old_96&quot;: {
+      &quot;path&quot;: &quot;images/s58b7f878c5b1-old-96.png&quot;,
+      &quot;sha256&quot;: &quot;14bc9f44c74c7e1bc3349e5918c85b316cd3d2c4b1c7de23be0c6ab5168b0dc2&quot;
+    },
+    &quot;old_mask_96&quot;: {
+      &quot;path&quot;: &quot;images/s58b7f878c5b1-old-mask-96.png&quot;,
+      &quot;sha256&quot;: &quot;c7c9e086489be2a539cb1713e6d6c90c263a2e95143553dbb0964d154c64f6a5&quot;
+    }
+  },
+  &quot;reason&quot;: &quot;archived_site_failed_current_safety_gates; no replacement&quot;
+}</pre></details></article><article><h2>03 · 醋</h2><div class="views"><figure><img width="96" height="96" src="images/s453475d07331-original-96.png"><figcaption>原字</figcaption></figure><figure><img width="96" height="96" src="images/s453475d07331-old-96.png"><figcaption>旧堵塞</figcaption></figure><figure><div class="skip">SKIP<br>不替换</div><figcaption>增强堵塞</figcaption></figure></div><details><summary>固定门位记录</summary><pre>{
+  &quot;baseline_candidate_id&quot;: &quot;s453475d07331&quot;,
+  &quot;base_char&quot;: &quot;醋&quot;,
+  &quot;seed&quot;: 4551779479501557975,
+  &quot;selected_stroke_indices&quot;: [
+    2,
+    4
+  ],
+  &quot;status&quot;: &quot;skipped&quot;,
+  &quot;candidate_id&quot;: null,
+  &quot;same_site&quot;: true,
+  &quot;archived_site&quot;: {
+    &quot;gate_start_x_96&quot;: 31.0,
+    &quot;gate_start_y_96&quot;: 44.0,
+    &quot;gate_end_x_96&quot;: 37.0,
+    &quot;gate_end_y_96&quot;: 44.0,
+    &quot;gate_width_96&quot;: 5.0,
+    &quot;local_stroke_width_96&quot;: 4.399999976158142,
+    &quot;roi_x0_96&quot;: 32.0,
+    &quot;roi_y0_96&quot;: 39.0,
+    &quot;roi_x1_96&quot;: 37.0,
+    &quot;roi_y1_96&quot;: 49.0,
+    &quot;original_gap_length_96&quot;: 10.0,
+    &quot;passage_start_x_96&quot;: 34.0,
+    &quot;passage_start_y_96&quot;: 40.0,
+    &quot;passage_end_x_96&quot;: 34.0,
+    &quot;passage_end_y_96&quot;: 47.0,
+    &quot;selected_stroke_indices&quot;: [
+      2,
+      4
+    ]
+  },
+  &quot;replayed_site&quot;: {
+    &quot;gate_start_x_96&quot;: 31.0,
+    &quot;gate_start_y_96&quot;: 44.0,
+    &quot;gate_end_x_96&quot;: 37.0,
+    &quot;gate_end_y_96&quot;: 44.0,
+    &quot;gate_width_96&quot;: 5.0,
+    &quot;local_stroke_width_96&quot;: 4.399999976158142,
+    &quot;roi_x0_96&quot;: 32.0,
+    &quot;roi_y0_96&quot;: 39.0,
+    &quot;roi_x1_96&quot;: 37.0,
+    &quot;roi_y1_96&quot;: 49.0,
+    &quot;original_gap_length_96&quot;: 10.0,
+    &quot;passage_start_x_96&quot;: 34.0,
+    &quot;passage_start_y_96&quot;: 40.0,
+    &quot;passage_end_x_96&quot;: 34.0,
+    &quot;passage_end_y_96&quot;: 47.0,
+    &quot;selected_stroke_indices&quot;: [
+      2,
+      4
+    ]
+  },
+  &quot;baseline_source_sha256&quot;: &quot;a28c478b5178e98f67f510b2d52fde08a69dc664654ef43498253b9b764d46ee&quot;,
+  &quot;baseline_archive_sha256&quot;: &quot;fff1fdf27380834fabb70b4bdf6459ac77df81124c55d5f8aa1981899422a308&quot;,
+  &quot;baseline_original_96_sha256&quot;: &quot;2266e940edfd7b3989d27a8c02eeb4aed1f047a67137a986624a87dd3ae3506d&quot;,
+  &quot;baseline_old_96_sha256&quot;: &quot;75c8b1806268dc8e96af8b82075cfb5c6ea77e36a0f0e42146e4bef35aa19178&quot;,
+  &quot;baseline_pixel_sha256&quot;: &quot;53f56836799b52e88cb753e7ef31a9983636a6a617641a475e703f03762c0a42&quot;,
+  &quot;files&quot;: {
+    &quot;original_96&quot;: {
+      &quot;path&quot;: &quot;images/s453475d07331-original-96.png&quot;,
+      &quot;sha256&quot;: &quot;2266e940edfd7b3989d27a8c02eeb4aed1f047a67137a986624a87dd3ae3506d&quot;
+    },
+    &quot;old_96&quot;: {
+      &quot;path&quot;: &quot;images/s453475d07331-old-96.png&quot;,
+      &quot;sha256&quot;: &quot;75c8b1806268dc8e96af8b82075cfb5c6ea77e36a0f0e42146e4bef35aa19178&quot;
+    },
+    &quot;old_mask_96&quot;: {
+      &quot;path&quot;: &quot;images/s453475d07331-old-mask-96.png&quot;,
+      &quot;sha256&quot;: &quot;3c636d20ce8b66b4a9bf8b1a8e89c820d75dca089933cc10e0cc4e432054a45c&quot;
+    }
+  },
+  &quot;reason&quot;: &quot;archived_site_failed_current_safety_gates; no replacement&quot;
+}</pre></details></article><article><h2>04 · 派</h2><div class="views"><figure><img width="96" height="96" src="images/sf7cd087529b7-original-96.png"><figcaption>原字</figcaption></figure><figure><img width="96" height="96" src="images/sf7cd087529b7-old-96.png"><figcaption>旧堵塞</figcaption></figure><figure><div class="skip">SKIP<br>不替换</div><figcaption>增强堵塞</figcaption></figure></div><details><summary>固定门位记录</summary><pre>{
+  &quot;baseline_candidate_id&quot;: &quot;sf7cd087529b7&quot;,
+  &quot;base_char&quot;: &quot;派&quot;,
+  &quot;seed&quot;: 7292500393998720182,
+  &quot;selected_stroke_indices&quot;: [
+    4,
+    6
+  ],
+  &quot;status&quot;: &quot;skipped&quot;,
+  &quot;candidate_id&quot;: null,
+  &quot;same_site&quot;: true,
+  &quot;archived_site&quot;: {
+    &quot;gate_start_x_96&quot;: 38.0,
+    &quot;gate_start_y_96&quot;: 44.0,
+    &quot;gate_end_x_96&quot;: 44.0,
+    &quot;gate_end_y_96&quot;: 44.0,
+    &quot;gate_width_96&quot;: 5.0,
+    &quot;local_stroke_width_96&quot;: 4.0,
+    &quot;roi_x0_96&quot;: 39.0,
+    &quot;roi_y0_96&quot;: 39.0,
+    &quot;roi_x1_96&quot;: 44.0,
+    &quot;roi_y1_96&quot;: 50.0,
+    &quot;original_gap_length_96&quot;: 11.0,
+    &quot;passage_start_x_96&quot;: 40.0,
+    &quot;passage_start_y_96&quot;: 40.0,
+    &quot;passage_end_x_96&quot;: 41.0,
+    &quot;passage_end_y_96&quot;: 48.0,
+    &quot;selected_stroke_indices&quot;: [
+      4,
+      6
+    ]
+  },
+  &quot;replayed_site&quot;: {
+    &quot;gate_start_x_96&quot;: 38.0,
+    &quot;gate_start_y_96&quot;: 44.0,
+    &quot;gate_end_x_96&quot;: 44.0,
+    &quot;gate_end_y_96&quot;: 44.0,
+    &quot;gate_width_96&quot;: 5.0,
+    &quot;local_stroke_width_96&quot;: 4.0,
+    &quot;roi_x0_96&quot;: 39.0,
+    &quot;roi_y0_96&quot;: 39.0,
+    &quot;roi_x1_96&quot;: 44.0,
+    &quot;roi_y1_96&quot;: 50.0,
+    &quot;original_gap_length_96&quot;: 11.0,
+    &quot;passage_start_x_96&quot;: 40.0,
+    &quot;passage_start_y_96&quot;: 40.0,
+    &quot;passage_end_x_96&quot;: 41.0,
+    &quot;passage_end_y_96&quot;: 48.0,
+    &quot;selected_stroke_indices&quot;: [
+      4,
+      6
+    ]
+  },
+  &quot;baseline_source_sha256&quot;: &quot;a28c478b5178e98f67f510b2d52fde08a69dc664654ef43498253b9b764d46ee&quot;,
+  &quot;baseline_archive_sha256&quot;: &quot;395e5a0a976116baa3a0ae689ca47559797c992fa598c2bc34061c503d509730&quot;,
+  &quot;baseline_original_96_sha256&quot;: &quot;dc4e99ada1e497cd82df4fd8c1f00555e3dad45c1517d5230f368029003398e3&quot;,
+  &quot;baseline_old_96_sha256&quot;: &quot;0856d413d30888bbf94ac64cfcded2e816b744ad863a428f9fbf234a0c0370ec&quot;,
+  &quot;baseline_pixel_sha256&quot;: &quot;22a7b9a35c40b47c18b0d370a8e7a9a12b1c2bed108f6019cde6918419bcfcc5&quot;,
+  &quot;files&quot;: {
+    &quot;original_96&quot;: {
+      &quot;path&quot;: &quot;images/sf7cd087529b7-original-96.png&quot;,
+      &quot;sha256&quot;: &quot;dc4e99ada1e497cd82df4fd8c1f00555e3dad45c1517d5230f368029003398e3&quot;
+    },
+    &quot;old_96&quot;: {
+      &quot;path&quot;: &quot;images/sf7cd087529b7-old-96.png&quot;,
+      &quot;sha256&quot;: &quot;0856d413d30888bbf94ac64cfcded2e816b744ad863a428f9fbf234a0c0370ec&quot;
+    },
+    &quot;old_mask_96&quot;: {
+      &quot;path&quot;: &quot;images/sf7cd087529b7-old-mask-96.png&quot;,
+      &quot;sha256&quot;: &quot;95550101fea8590dd0086b10290000d11772cebdfcab1b5b7da848e2eb98f244&quot;
+    }
+  },
+  &quot;reason&quot;: &quot;archived_site_failed_current_safety_gates; no replacement&quot;
+}</pre></details></article><article><h2>05 · 觅</h2><div class="views"><figure><img width="96" height="96" src="images/s4ea729dc042e-original-96.png"><figcaption>原字</figcaption></figure><figure><img width="96" height="96" src="images/s4ea729dc042e-old-96.png"><figcaption>旧堵塞</figcaption></figure><figure><img width="96" height="96" src="images/s6aca245f85e5-candidate_96.png"><figcaption>增强堵塞</figcaption></figure></div><details><summary>固定门位记录</summary><pre>{
+  &quot;baseline_candidate_id&quot;: &quot;s4ea729dc042e&quot;,
+  &quot;base_char&quot;: &quot;觅&quot;,
+  &quot;seed&quot;: 9085561361293672308,
+  &quot;selected_stroke_indices&quot;: [
+    6,
+    7
+  ],
+  &quot;status&quot;: &quot;accepted&quot;,
+  &quot;candidate_id&quot;: &quot;s6aca245f85e5&quot;,
+  &quot;same_site&quot;: true,
+  &quot;archived_site&quot;: {
+    &quot;gate_start_x_96&quot;: 39.0,
+    &quot;gate_start_y_96&quot;: 63.0,
+    &quot;gate_end_x_96&quot;: 44.0,
+    &quot;gate_end_y_96&quot;: 63.0,
+    &quot;gate_width_96&quot;: 4.0,
+    &quot;local_stroke_width_96&quot;: 5.0,
+    &quot;roi_x0_96&quot;: 39.0,
+    &quot;roi_y0_96&quot;: 59.0,
+    &quot;roi_x1_96&quot;: 44.0,
+    &quot;roi_y1_96&quot;: 68.0,
+    &quot;original_gap_length_96&quot;: 9.0,
+    &quot;passage_start_x_96&quot;: 42.0,
+    &quot;passage_start_y_96&quot;: 60.0,
+    &quot;passage_end_x_96&quot;: 41.0,
+    &quot;passage_end_y_96&quot;: 66.0,
+    &quot;selected_stroke_indices&quot;: [
+      6,
+      7
+    ]
+  },
+  &quot;replayed_site&quot;: {
+    &quot;gate_start_x_96&quot;: 39.0,
+    &quot;gate_start_y_96&quot;: 63.0,
+    &quot;gate_end_x_96&quot;: 44.0,
+    &quot;gate_end_y_96&quot;: 63.0,
+    &quot;gate_width_96&quot;: 4.0,
+    &quot;local_stroke_width_96&quot;: 5.0,
+    &quot;roi_x0_96&quot;: 39.0,
+    &quot;roi_y0_96&quot;: 59.0,
+    &quot;roi_x1_96&quot;: 44.0,
+    &quot;roi_y1_96&quot;: 68.0,
+    &quot;original_gap_length_96&quot;: 9.0,
+    &quot;passage_start_x_96&quot;: 42.0,
+    &quot;passage_start_y_96&quot;: 60.0,
+    &quot;passage_end_x_96&quot;: 41.0,
+    &quot;passage_end_y_96&quot;: 66.0,
+    &quot;selected_stroke_indices&quot;: [
+      6,
+      7
+    ]
+  },
+  &quot;baseline_source_sha256&quot;: &quot;a28c478b5178e98f67f510b2d52fde08a69dc664654ef43498253b9b764d46ee&quot;,
+  &quot;baseline_archive_sha256&quot;: &quot;592d3568df20b067a47300b6e22e5022af54f2f1d0dc620cc5e1d87a6e4233b0&quot;,
+  &quot;baseline_original_96_sha256&quot;: &quot;1a73069027619d90671048caa7919a0366da807167ab5ac935869033d99c3f38&quot;,
+  &quot;baseline_old_96_sha256&quot;: &quot;961d3ba5ec34a4888a35c8b3f0720efcfd937a5f13b7e774aff0f9a2dd14d0fb&quot;,
+  &quot;baseline_pixel_sha256&quot;: &quot;f851db87a6fa9261caa4dbaef53bdabbd49087581580cf5ad6607ee344095136&quot;,
+  &quot;files&quot;: {
+    &quot;original_96&quot;: {
+      &quot;path&quot;: &quot;images/s4ea729dc042e-original-96.png&quot;,
+      &quot;sha256&quot;: &quot;1a73069027619d90671048caa7919a0366da807167ab5ac935869033d99c3f38&quot;
+    },
+    &quot;old_96&quot;: {
+      &quot;path&quot;: &quot;images/s4ea729dc042e-old-96.png&quot;,
+      &quot;sha256&quot;: &quot;961d3ba5ec34a4888a35c8b3f0720efcfd937a5f13b7e774aff0f9a2dd14d0fb&quot;
+    },
+    &quot;old_mask_96&quot;: {
+      &quot;path&quot;: &quot;images/s4ea729dc042e-old-mask-96.png&quot;,
+      &quot;sha256&quot;: &quot;8dd3f9b53f03d7fb3e7763c68bd28e65b1bd228d00fdfd64964db1b1f373b91a&quot;
+    },
+    &quot;new_96&quot;: {
+      &quot;path&quot;: &quot;images/s6aca245f85e5-candidate_96.png&quot;,
+      &quot;sha256&quot;: &quot;9766219157d1b2e22c7a74d6ca6f8d34488b444e65b519036c71aa6735b81a80&quot;
+    },
+    &quot;new_mask_96&quot;: {
+      &quot;path&quot;: &quot;images/s6aca245f85e5-mask_96.png&quot;,
+      &quot;sha256&quot;: &quot;0d13a227ebe88a4f1e90e52b5b80ad91b50928669dc88a64fe2e4bb59b1480ba&quot;
+    }
+  },
+  &quot;pixel_sha256&quot;: &quot;01ebc903ef37f45d31c6a0b507efc80a8809f63dfdda97edb696b433dd9536e9&quot;,
+  &quot;pixel_changed&quot;: true,
+  &quot;metrics&quot;: {
+    &quot;roi_x0_96&quot;: 39.0,
+    &quot;roi_y0_96&quot;: 59.0,
+    &quot;roi_x1_96&quot;: 44.0,
+    &quot;roi_y1_96&quot;: 68.0,
+    &quot;gate_start_x_96&quot;: 39.0,
+    &quot;gate_start_y_96&quot;: 63.0,
+    &quot;gate_end_x_96&quot;: 44.0,
+    &quot;gate_end_y_96&quot;: 63.0,
+    &quot;local_stroke_width_96&quot;: 5.0,
+    &quot;local_stroke_width&quot;: 6.666666666666667,
+    &quot;gate_width_96&quot;: 4.0,
+    &quot;added_stroke_count&quot;: 1.0,
+    &quot;new_core_pixels_96&quot;: 119.0,
+    &quot;new_solid_area_96&quot;: 47.0,
+    &quot;new_solid_length_96&quot;: 10.0,
+    &quot;new_solid_radius_96&quot;: 2.196899890899658,
+    &quot;new_solid_fraction&quot;: 0.04558680892337536,
+    &quot;bridge_centerline_length_96&quot;: 20.0,
+    &quot;bridge_thickness_96&quot;: 10.0,
+    &quot;original_gap_area_96&quot;: 34.0,
+    &quot;gap_consumed_fraction&quot;: 1.0,
+    &quot;blocked_length_96&quot;: 9.0,
+    &quot;original_gap_length_96&quot;: 9.0,
+    &quot;blocked_length_fraction&quot;: 1.0,
+    &quot;passage_start_x_96&quot;: 42.0,
+    &quot;passage_start_y_96&quot;: 60.0,
+    &quot;passage_end_x_96&quot;: 41.0,
+    &quot;passage_end_y_96&quot;: 66.0,
+    &quot;changed_fraction&quot;: 0.2303943287549845,
+    &quot;input_changed_fraction&quot;: 0.24151309408341415,
+    &quot;input_changed_pixels&quot;: 249.0,
+    &quot;input_foreground_changed_pixels&quot;: 153.0,
+    &quot;input_edge_changed_pixels&quot;: 117.0,
+    &quot;glyph_scale&quot;: 96.0,
+    &quot;attempts&quot;: 2.0
+  }
+}</pre></details></article></html>

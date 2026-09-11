@@ -1,0 +1,73 @@
+{
+  "purpose": "fixed_old_gate_strength_calibration_not_training_or_evaluation",
+  "generator_version": "stroke-block-gap-strength-v1",
+  "created_date": "2026-09-11",
+  "slot_count": 5,
+  "candidate_count": 2,
+  "skipped_count": 3,
+  "complete": false,
+  "baseline_candidate_ids": [
+    "sb361978ba729",
+    "s58b7f878c5b1",
+    "s453475d07331",
+    "sf7cd087529b7",
+    "s4ea729dc042e"
+  ],
+  "sampling": "exact archived passage; no retry or replacement",
+  "baseline_files_sha256": {
+    "ARPHICPL.txt": "3a5e90c0957524a89e48203febcd4492ca4393678abaa7e5b4d70f3ff32b386d",
+    "candidates.jsonl": "94a025874eb147dd712c56625786b42914dca7f7e5708d7e7f7f27776f1ee177",
+    "images/s453475d07331-candidate_96.png": "75c8b1806268dc8e96af8b82075cfb5c6ea77e36a0f0e42146e4bef35aa19178",
+    "images/s453475d07331-mask_96.png": "3c636d20ce8b66b4a9bf8b1a8e89c820d75dca089933cc10e0cc4e432054a45c",
+    "images/s453475d07331-original_96.png": "2266e940edfd7b3989d27a8c02eeb4aed1f047a67137a986624a87dd3ae3506d",
+    "images/s4ea729dc042e-candidate_96.png": "961d3ba5ec34a4888a35c8b3f0720efcfd937a5f13b7e774aff0f9a2dd14d0fb",
+    "images/s4ea729dc042e-mask_96.png": "8dd3f9b53f03d7fb3e7763c68bd28e65b1bd228d00fdfd64964db1b1f373b91a",
+    "images/s4ea729dc042e-original_96.png": "1a73069027619d90671048caa7919a0366da807167ab5ac935869033d99c3f38",
+    "images/s58b7f878c5b1-candidate_96.png": "14bc9f44c74c7e1bc3349e5918c85b316cd3d2c4b1c7de23be0c6ab5168b0dc2",
+    "images/s58b7f878c5b1-mask_96.png": "c7c9e086489be2a539cb1713e6d6c90c263a2e95143553dbb0964d154c64f6a5",
+    "images/s58b7f878c5b1-original_96.png": "abe5068219d4eafbd26ca1eadf61ad9856be678f95080c9056d784d007aa4d46",
+    "images/sb361978ba729-candidate_96.png": "4fb569854b44d1c91883ee12fd56132855eb8ec6f2bd935f6c598b7d7ce0e878",
+    "images/sb361978ba729-mask_96.png": "6d12762c98d3901a073cbdb892154489130ddec198576becc68d40c1c3981c5f",
+    "images/sb361978ba729-original_96.png": "12fb68fa2c6cd28a117d1cf2821a5b2b50e40c0471c88f2c5a266072ab583787",
+    "images/sf7cd087529b7-candidate_96.png": "0856d413d30888bbf94ac64cfcded2e816b744ad863a428f9fbf234a0c0370ec",
+    "images/sf7cd087529b7-mask_96.png": "95550101fea8590dd0086b10290000d11772cebdfcab1b5b7da848e2eb98f244",
+    "images/sf7cd087529b7-original_96.png": "dc4e99ada1e497cd82df4fd8c1f00555e3dad45c1517d5230f368029003398e3",
+    "layers/s453475d07331.npz": "fff1fdf27380834fabb70b4bdf6459ac77df81124c55d5f8aa1981899422a308",
+    "layers/s4ea729dc042e.npz": "592d3568df20b067a47300b6e22e5022af54f2f1d0dc620cc5e1d87a6e4233b0",
+    "layers/s58b7f878c5b1.npz": "3e292c658eb06080aa46891a1fab575eb864f718e5d84ed6b1c984172656e16f",
+    "layers/sb361978ba729.npz": "beb52559000b8e472435813bbcf45bd47fa56a699ce88ab52bfc936195ece680",
+    "layers/sf7cd087529b7.npz": "395e5a0a976116baa3a0ae689ca47559797c992fa598c2bc34061c503d509730",
+    "run.json": "eb701828a0bd5f71e8b0771f8df5cae5d32e973c1e9575f42111f4d1ced0f114",
+    "source.json": "c9e1227144c441b16560576f7421b2250cbff0a6a67e1120434b215a231d0535"
+  },
+  "source_code_sha256": {
+    "src/poor_word/glyphs/stroke_bridge.py": "8798d4cd606131455e21f50db3c5911e3e9e87e492e5fe1ce8523589d3353b97",
+    "src/poor_word/glyphs/stroke_corrupt.py": "f87ce149851b4d4f7d1a8535dbfb9f197090e1690adf6cc84ec34b8601306811",
+    "src/poor_word/glyphs/stroke_preview.py": "3e93db04ce109f4fc3eaec33c4a1a0f279b52710ce1835ab45728d6a6a021ac4",
+    "src/poor_word/glyphs/preview_v2.py": "7a058b75f5063c113eed99e98f3b4ce9cfe214366cb719cea3ac90528bac9b01"
+  },
+  "replay_code_sha256": "cbfce999cc975fab5c64d7e24eb0d09e977dcd8cc8b893be8a56e05d16f32bdb",
+  "packages": {
+    "numpy": "1.26.4",
+    "pillow": "11.3.0",
+    "opencv-python-headless": "4.11.0.86",
+    "scikit-image": "0.26.0"
+  },
+  "skipped": [
+    {
+      "baseline_candidate_id": "s58b7f878c5b1",
+      "base_char": "蠢",
+      "reason": "archived_site_failed_current_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "s453475d07331",
+      "base_char": "醋",
+      "reason": "archived_site_failed_current_safety_gates; no replacement"
+    },
+    {
+      "baseline_candidate_id": "sf7cd087529b7",
+      "base_char": "派",
+      "reason": "archived_site_failed_current_safety_gates; no replacement"
+    }
+  ]
+}
